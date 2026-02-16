@@ -2,6 +2,8 @@ package com.deniscerri.ytdl.ui.more.settings
 
 import android.content.Context
 import android.os.Bundle
+import android.text.Editable
+import android.text.TextWatcher
 import androidx.activity.addCallback
 import androidx.navigation.NavController
 import androidx.navigation.fragment.NavHostFragment
@@ -9,11 +11,14 @@ import androidx.navigation.fragment.findNavController
 import com.deniscerri.ytdl.R
 import com.deniscerri.ytdl.databinding.ActivitySettingsBinding
 import com.deniscerri.ytdl.ui.BaseActivity
+import com.google.android.material.textfield.TextInputEditText
 
 
 class SettingsActivity : BaseActivity() {
     var context: Context? = null
     lateinit var binding: ActivitySettingsBinding
+    private lateinit var searchEditText: TextInputEditText
+    
     public override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         context = baseContext
@@ -23,9 +28,14 @@ class SettingsActivity : BaseActivity() {
         val navHostFragment = supportFragmentManager.findFragmentById(R.id.frame_layout) as NavHostFragment
         val navController = navHostFragment.findNavController()
 
+        searchEditText = binding.settingsSearchEditText
+        setupSearchFunctionality()
+
         val listener = NavController.OnDestinationChangedListener { controller, destination, arguments ->
             if (destination.id == R.id.mainSettingsFragment){
                 changeTopAppbarTitle(getString(R.string.settings))
+            } else {
+                clearSearchFocus()
             }
         }
 
@@ -36,6 +46,15 @@ class SettingsActivity : BaseActivity() {
 
         onBackPressedDispatcher.addCallback(this) {
             if (navController.currentDestination?.id == R.id.mainSettingsFragment) {
+                val navHostFragment = supportFragmentManager.findFragmentById(R.id.frame_layout) as? NavHostFragment
+                val currentFragment = navHostFragment?.childFragmentManager?.fragments?.firstOrNull()
+                
+                if (currentFragment is MainSettingsFragment && currentFragment.handleBackPressed()) {
+                    searchEditText.text?.clear()
+                    hideKeyboard()
+                    return@addCallback
+                }
+                
                 navController.popBackStack()
                 finishAndRemoveTask()
             }else{
@@ -45,8 +64,44 @@ class SettingsActivity : BaseActivity() {
 
         if (savedInstanceState == null) navController.navigate(R.id.mainSettingsFragment)
     }
+    
+    private fun setupSearchFunctionality() {
+        searchEditText.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            
+            override fun afterTextChanged(s: Editable?) {
+                val query = s?.toString() ?: ""
+                filterSettings(query)
+            }
+        })
+    }
+    
+    private fun filterSettings(query: String) {
+        val navHostFragment = supportFragmentManager.findFragmentById(R.id.frame_layout) as? NavHostFragment
+        val currentFragment = navHostFragment?.childFragmentManager?.fragments?.firstOrNull()
+        
+        if (currentFragment is BaseSettingsFragment) {
+            currentFragment.filterPreferences(query)
+        }
+    }
 
     fun changeTopAppbarTitle(text: String) {
         if (this::binding.isInitialized) binding.collapsingToolbar.title = text
+    }
+    
+    fun clearSearchFocus() {
+        if (this::searchEditText.isInitialized) {
+            searchEditText.clearFocus()
+            hideKeyboard()
+        }
+    }
+    
+    private fun hideKeyboard() {
+        val imm = getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
+        currentFocus?.let { view ->
+            imm?.hideSoftInputFromWindow(view.windowToken, 0)
+        }
     }
 }

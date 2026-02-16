@@ -35,7 +35,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 
-class FolderSettingsFragment : BaseSettingsFragment() {
+class FolderSettingsFragment : SearchableSettingsFragment() {
     override val title: Int = R.string.directories
 
     private var musicPath: Preference? = null
@@ -58,6 +58,7 @@ class FolderSettingsFragment : BaseSettingsFragment() {
 
     override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
         setPreferencesFromResource(R.xml.folders_preference, rootKey)
+        buildPreferenceList(preferenceScreen)
 
         preferences = PreferenceManager.getDefaultSharedPreferences(requireContext())
         editor = preferences.edit()

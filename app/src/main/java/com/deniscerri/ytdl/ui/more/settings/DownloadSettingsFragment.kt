@@ -27,13 +27,14 @@ import java.util.Calendar
 import java.util.concurrent.TimeUnit
 
 
-class DownloadSettingsFragment : BaseSettingsFragment() {
+class DownloadSettingsFragment : SearchableSettingsFragment() {
     override val title: Int = R.string.downloads
 
     private lateinit var archivePath: Preference
 
     override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
         setPreferencesFromResource(R.xml.downloading_preferences, rootKey)
+        buildPreferenceList(preferenceScreen)
         val preferences = PreferenceManager.getDefaultSharedPreferences(requireContext())
         val rememberDownloadType = findPreference<SwitchPreferenceCompat>("remember_download_type")
         val downloadType = findPreference<ListPreference>("preferred_download_type")

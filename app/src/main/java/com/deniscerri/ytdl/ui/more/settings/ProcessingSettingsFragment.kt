@@ -11,11 +11,12 @@ import com.deniscerri.ytdl.R
 import com.deniscerri.ytdl.util.UiUtil
 
 
-class ProcessingSettingsFragment : BaseSettingsFragment() {
+class ProcessingSettingsFragment : SearchableSettingsFragment() {
     override val title: Int = R.string.processing
     @SuppressLint("RestrictedApi")
     override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
         setPreferencesFromResource(R.xml.processing_preferences, rootKey)
+        buildPreferenceList(preferenceScreen)
         val prefs = PreferenceManager.getDefaultSharedPreferences(requireActivity())
         val editor = prefs.edit()
 

@@ -7,29 +7,27 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.os.Build
 import android.os.Bundle
-import android.os.Environment
 import android.util.LayoutDirection
 import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatDelegate
-import androidx.core.content.edit
 import androidx.core.os.LocaleListCompat
 import androidx.core.text.layoutDirection
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.navigation.fragment.findNavController
 import androidx.preference.Preference
-import androidx.preference.PreferenceFragmentCompat
+import androidx.preference.PreferenceCategory
+import androidx.preference.PreferenceGroup
 import androidx.preference.PreferenceManager
-import androidx.preference.SwitchPreferenceCompat
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import com.deniscerri.ytdl.BuildConfig
-import com.deniscerri.ytdl.MainActivity
 import com.deniscerri.ytdl.R
 import com.deniscerri.ytdl.database.models.BackupSettingsItem
 import com.deniscerri.ytdl.database.models.CommandTemplate
@@ -40,14 +38,7 @@ import com.deniscerri.ytdl.database.models.RestoreAppDataItem
 import com.deniscerri.ytdl.database.models.observeSources.ObserveSourcesItem
 import com.deniscerri.ytdl.database.models.SearchHistoryItem
 import com.deniscerri.ytdl.database.models.TemplateShortcut
-import com.deniscerri.ytdl.database.viewmodel.CommandTemplateViewModel
-import com.deniscerri.ytdl.database.viewmodel.CookieViewModel
-import com.deniscerri.ytdl.database.viewmodel.DownloadViewModel
-import com.deniscerri.ytdl.database.viewmodel.HistoryViewModel
-import com.deniscerri.ytdl.database.viewmodel.ObserveSourcesViewModel
-import com.deniscerri.ytdl.database.viewmodel.ResultViewModel
 import com.deniscerri.ytdl.database.viewmodel.SettingsViewModel
-import com.deniscerri.ytdl.ui.more.settings.FolderSettingsFragment.Companion.COMMAND_PATH_CODE
 import com.deniscerri.ytdl.util.FileUtil
 import com.deniscerri.ytdl.util.ThemeUtil
 import com.deniscerri.ytdl.util.UiUtil
@@ -55,21 +46,25 @@ import com.deniscerri.ytdl.util.UpdateUtil
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
 import com.google.gson.Gson
-import com.google.gson.GsonBuilder
-import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.BufferedReader
-import java.io.File
 import java.io.InputStreamReader
-import java.util.Calendar
 import java.util.Locale
 
+class MainSettingsFragment : BaseSettingsFragment() {
+    override val title: Int = R.string.settings
 
-class MainSettingsFragment : PreferenceFragmentCompat() {
+    private var appearance: Preference? = null
+    private var folders: Preference? = null
+    private var downloading: Preference? = null
+    private var processing: Preference? = null
+    private var updating: Preference? = null
+    private var advanced: Preference? = null
+
     private var backup : Preference? = null
     private var restore : Preference? = null
     private var backupPath : Preference? = null
@@ -78,17 +73,75 @@ class MainSettingsFragment : PreferenceFragmentCompat() {
     private var activeDownloadCount = 0
 
     private lateinit var settingsViewModel: SettingsViewModel
-
     private lateinit var editor: SharedPreferences.Editor
 
+    private val searchCategories = mutableMapOf<String, PreferenceCategory>()
+    private var isSearchMode = false
+    private var lastSearchQuery: String = ""
+
+    private val categoryFragmentMap = mapOf(
+        "appearance" to R.xml.general_preferences,
+        "folders" to R.xml.folders_preference,
+        "downloading" to R.xml.downloading_preferences,
+        "processing" to R.xml.processing_preferences,
+        "updating" to R.xml.updating_preferences,
+        "advanced" to R.xml.advanced_preferences
+    )
+
+    private val categoryTitles = mapOf(
+        "appearance" to R.string.general,
+        "folders" to R.string.directories,
+        "downloading" to R.string.downloads,
+        "processing" to R.string.processing,
+        "updating" to R.string.updating,
+        "advanced" to R.string.advanced
+    )
+    
+    private val categoryNavigationActions = mapOf(
+        "appearance" to R.id.action_mainSettingsFragment_to_appearanceSettingsFragment,
+        "folders" to R.id.action_mainSettingsFragment_to_folderSettingsFragment,
+        "downloading" to R.id.action_mainSettingsFragment_to_downloadSettingsFragment,
+        "processing" to R.id.action_mainSettingsFragment_to_processingSettingsFragment,
+        "updating" to R.id.action_mainSettingsFragment_to_updateSettingsFragment,
+        "advanced" to R.id.action_mainSettingsFragment_to_advancedSettingsFragment
+    )
+
+    private data class HierarchicalPreference(
+        val preference: Preference,
+        val parent: PreferenceGroup?,
+        val depth: Int = 0,
+        val isParent: Boolean = false
+    )
+
+    companion object {
+        const val ARG_HIGHLIGHT_KEY = "highlight_preference_key"
+        const val ARG_RETURN_TO_SEARCH = "return_to_search"
+    }
+    
+    fun handleBackPressed(): Boolean {
+        if (isSearchMode) {
+            restoreNormalView()
+            return true
+        }
+        return false
+    }
 
     override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
         setPreferencesFromResource(R.xml.root_preferences, rootKey)
+
+        buildPreferenceList(preferenceScreen)
+
         val navController = findNavController()
         val preferences = PreferenceManager.getDefaultSharedPreferences(requireContext())
         editor = preferences.edit()
 
-        val appearance = findPreference<Preference>("appearance")
+        appearance = findPreference("appearance")
+        folders = findPreference("folders")
+        downloading = findPreference("downloading")
+        processing = findPreference("processing")
+        updating = findPreference("updating")
+        advanced = findPreference("advanced")
+
         val separator = if (Locale(preferences.getString("app_language", "en")!!).layoutDirection == LayoutDirection.RTL) "،" else ","
         appearance?.summary = "${if (Build.VERSION.SDK_INT < 33) getString(R.string.language) + "$separator " else ""}${getString(R.string.Theme)}$separator ${getString(R.string.accents)}$separator ${getString(R.string.preferred_search_engine)}"
         appearance?.setOnPreferenceClickListener {
@@ -96,42 +149,36 @@ class MainSettingsFragment : PreferenceFragmentCompat() {
             true
         }
 
-        val folders = findPreference<Preference>("folders")
         folders?.summary = "${getString(R.string.music_directory)}$separator ${getString(R.string.video_directory)}$separator ${getString(R.string.command_directory)}"
         folders?.setOnPreferenceClickListener {
             navController.navigate(R.id.action_mainSettingsFragment_to_folderSettingsFragment)
             true
         }
 
-        val downloading = findPreference<Preference>("downloading")
         downloading?.summary = "${getString(R.string.quick_download)}$separator ${getString(R.string.concurrent_downloads)}$separator ${getString(R.string.limit_rate)}"
         downloading?.setOnPreferenceClickListener {
             navController.navigate(R.id.action_mainSettingsFragment_to_downloadSettingsFragment)
             true
         }
 
-        val processing = findPreference<Preference>("processing")
         processing?.summary = "${getString(R.string.sponsorblock)}$separator ${getString(R.string.embed_subtitles)}$separator ${getString(R.string.add_chapters)}"
         processing?.setOnPreferenceClickListener {
             navController.navigate(R.id.action_mainSettingsFragment_to_processingSettingsFragment)
             true
         }
 
-        val updating = findPreference<Preference>("updating")
         updating?.summary = "${getString(R.string.update_ytdl)}$separator ${getString(R.string.update_app)}"
         updating?.setOnPreferenceClickListener {
             navController.navigate(R.id.action_mainSettingsFragment_to_updateSettingsFragment)
             true
         }
 
-        val advanced = findPreference<Preference>("advanced")
         advanced?.summary = "PO Token$separator ${getString(R.string.other_youtube_extractor_args)}"
         advanced?.setOnPreferenceClickListener {
             navController.navigate(R.id.action_mainSettingsFragment_to_advancedSettingsFragment)
             true
         }
 
-        //about section -------------------------
         updateUtil = UpdateUtil(requireContext())
 
         WorkManager.getInstance(requireContext()).getWorkInfosByTagLiveData("download").observe(this){
@@ -210,11 +257,9 @@ class MainSettingsFragment : PreferenceFragmentCompat() {
                     }
                 }
 
-                // handle the negative button of the alert dialog
                 builder.setNegativeButton(
                     getString(R.string.cancel)
                 ) { _: DialogInterface?, _: Int -> }
-
 
                 val dialog = builder.create()
                 dialog.show()
@@ -246,220 +291,463 @@ class MainSettingsFragment : PreferenceFragmentCompat() {
         }
     }
 
-    private var backupPathResultLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            result.data?.data?.let {
-                activity?.contentResolver?.takePersistableUriPermission(
-                    it,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                            Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                )
-            }
-
-            val path = result.data!!.data.toString()
-            backupPath!!.summary = FileUtil.formatPath(path)
-            editor.putString("backup_path", path)
-            editor.apply()
+    override fun filterPreferences(query: String) {
+        if (query.isEmpty()) {
+            restoreNormalView()
+            return
         }
+
+        lastSearchQuery = query
+        enterSearchMode(query.lowercase())
     }
 
+    private fun restoreNormalView() {
+        isSearchMode = false
+        lastSearchQuery = ""
+        
+        searchCategories.values.forEach { category ->
+            preferenceScreen.removePreference(category)
+        }
+        searchCategories.clear()
 
+        restoreAllPreferences()
+        appearance?.isVisible = true
+        folders?.isVisible = true
+        downloading?.isVisible = true
+        processing?.isVisible = true
+        updating?.isVisible = true
+        advanced?.isVisible = true
+        
+        findPreference<PreferenceCategory>("backup_restore")?.isVisible = true
+    }
 
-    private var appRestoreResultLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            result.data?.data?.let {
-                activity?.contentResolver?.takePersistableUriPermission(
-                    it,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                            Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                )
+    private fun enterSearchMode(query: String) {
+        isSearchMode = true
+        
+        appearance?.isVisible = false
+        folders?.isVisible = false
+        downloading?.isVisible = false
+        processing?.isVisible = false
+        updating?.isVisible = false
+        advanced?.isVisible = false
+        
+        searchCategories.values.forEach { category ->
+            preferenceScreen.removePreference(category)
+        }
+        searchCategories.clear()
+
+        categoryFragmentMap.forEach { (categoryKey, xmlRes) ->
+            val hierarchicalResults = findMatchingPreferencesWithHierarchy(xmlRes, query)
+            
+            if (hierarchicalResults.isNotEmpty()) {
+                val mainCategory = PreferenceCategory(requireContext()).apply {
+                    title = getString(categoryTitles[categoryKey] ?: R.string.settings)
+                    key = "search_main_$categoryKey"
+                }
+                
+                preferenceScreen.addPreference(mainCategory)
+                
+                buildHierarchicalPreferences(hierarchicalResults, mainCategory, categoryKey, query)
+                
+                searchCategories[categoryKey] = mainCategory
             }
-            lifecycleScope.launch {
-                runCatching {
-                    val ip = requireContext().contentResolver.openInputStream(result.data!!.data!!)
-                    val r = BufferedReader(InputStreamReader(ip))
-                    val total: java.lang.StringBuilder = java.lang.StringBuilder()
-                    var line: String?
-                    while (r.readLine().also { line = it } != null) {
-                        total.append(line).append('\n')
-                    }
+        }
 
-                    //PARSE RESTORE JSON
-                    val json = Gson().fromJson(total.toString(), JsonObject::class.java)
-                    val restoreData = RestoreAppDataItem()
-                    val parsedDataMessage = StringBuilder()
+        super.filterPreferences(query)
+        hideEmptyCategoriesInMain()
+    }
 
-                    if (json.has("settings")) {
-                        restoreData.settings = json.getAsJsonArray("settings").map {
-                            Gson().fromJson(it.toString().replace("^\"|\"$", ""), BackupSettingsItem::class.java)
-                        }
-                        parsedDataMessage.appendLine("${getString(R.string.settings)}: ${restoreData.settings!!.size}")
-                    }
+    private fun findMatchingPreferencesWithHierarchy(xmlRes: Int, query: String): List<HierarchicalPreference> {
+        val results = mutableListOf<HierarchicalPreference>()
+        
+        try {
+            val preferenceManager = PreferenceManager(requireContext())
+            val tempScreen = preferenceManager.inflateFromResource(requireContext(), xmlRes, null)
+            collectMatchingWithHierarchy(tempScreen, query, results, null, 0)
+        } catch (e: Exception) {
+            Log.e("MainSettings", "Error loading preferences from XML", e)
+        }
+        
+        return results
+    }
 
-                    if (json.has("downloads")) {
-                        restoreData.downloads = json.getAsJsonArray("downloads").map {
-                            val item =
-                                Gson().fromJson(it.toString().replace("^\"|\"$", ""), HistoryItem::class.java)
-                            item.id = 0L
-                            item
-                        }
-                        parsedDataMessage.appendLine("${getString(R.string.downloads)}: ${restoreData.downloads!!.size}")
+    private fun collectMatchingWithHierarchy(
+        group: PreferenceGroup,
+        query: String,
+        results: MutableList<HierarchicalPreference>,
+        parent: PreferenceGroup?,
+        depth: Int
+    ) {
+        for (i in 0 until group.preferenceCount) {
+            val pref = group.getPreference(i)
 
-                    }
+            val title = pref.title?.toString() ?: ""
+            val summary = pref.summary?.toString() ?: ""
+            val key = pref.key ?: ""
 
-                    if (json.has("queued")) {
-                        restoreData.queued = json.getAsJsonArray("queued").map {
-                            val item =
-                                Gson().fromJson(it.toString().replace("^\"|\"$", ""), DownloadItem::class.java)
-                            item.id = 0L
-                            item
-                        }
-                        parsedDataMessage.appendLine("${getString(R.string.queue)}: ${restoreData.queued!!.size}")
-                    }
+            val matches = title.lowercase().contains(query) ||
+                    summary.lowercase().contains(query) ||
+                    key.lowercase().contains(query)
 
-                    if (json.has("scheduled")) {
-                        restoreData.scheduled = json.getAsJsonArray("scheduled").map {
-                            val item =
-                                Gson().fromJson(it.toString().replace("^\"|\"$", ""), DownloadItem::class.java)
-                            item.id = 0L
-                            item
-                        }
-                        parsedDataMessage.appendLine("${getString(R.string.scheduled)}: ${restoreData.scheduled!!.size}")
-                    }
-
-                    if (json.has("cancelled")) {
-                        restoreData.cancelled = json.getAsJsonArray("cancelled").map {
-                            val item =
-                                Gson().fromJson(it.toString().replace("^\"|\"$", ""), DownloadItem::class.java)
-                            item.id = 0L
-                            item
-                        }
-                        parsedDataMessage.appendLine("${getString(R.string.cancelled)}: ${restoreData.cancelled!!.size}")
-                    }
-
-                    if (json.has("errored")) {
-                        restoreData.errored = json.getAsJsonArray("errored").map {
-                            val item =
-                                Gson().fromJson(it.toString().replace("^\"|\"$", ""), DownloadItem::class.java)
-                            item.id = 0L
-                            item
-                        }
-                        parsedDataMessage.appendLine("${getString(R.string.errored)}: ${restoreData.errored!!.size}")
-                    }
-
-                    if (json.has("saved")) {
-                        restoreData.saved = json.getAsJsonArray("saved").map {
-                            val item =
-                                Gson().fromJson(it.toString().replace("^\"|\"$", ""), DownloadItem::class.java)
-                            item.id = 0L
-                            item
-                        }
-                        parsedDataMessage.appendLine("${getString(R.string.saved)}: ${restoreData.saved!!.size}")
-                    }
-
-                    if (json.has("cookies")) {
-                        restoreData.cookies = json.getAsJsonArray("cookies").map {
-                            val item =
-                                Gson().fromJson(it.toString().replace("^\"|\"$", ""), CookieItem::class.java)
-                            item.id = 0L
-                            item
-                        }
-                        parsedDataMessage.appendLine("${getString(R.string.cookies)}: ${restoreData.cookies!!.size}")
-                    }
-
-                    if (json.has("templates")) {
-                        restoreData.templates = json.getAsJsonArray("templates").map {
-                            val item = Gson().fromJson(
-                                it.toString().replace("^\"|\"$", ""),
-                                CommandTemplate::class.java
-                            )
-                            item.id = 0L
-                            item
-                        }
-                        parsedDataMessage.appendLine("${getString(R.string.command_templates)}: ${restoreData.templates!!.size}")
-                    }
-
-                    if (json.has("shortcuts")) {
-                        restoreData.shortcuts = json.getAsJsonArray("shortcuts").map {
-                            val item = Gson().fromJson(
-                                it.toString().replace("^\"|\"$", ""),
-                                TemplateShortcut::class.java
-                            )
-                            item.id = 0L
-                            item
-                        }
-
-                        parsedDataMessage.appendLine("${getString(R.string.shortcuts)}: ${restoreData.shortcuts!!.size}")
-
-                    }
-
-                    if (json.has("search_history")) {
-                        restoreData.searchHistory = json.getAsJsonArray("search_history").map {
-                            val item = Gson().fromJson(
-                                it.toString().replace("^\"|\"$", ""),
-                                SearchHistoryItem::class.java
-                            )
-                            item.id = 0L
-                            item
-                        }
-
-                        parsedDataMessage.appendLine("${getString(R.string.search_history)}: ${restoreData.searchHistory!!.size}")
-                    }
-
-                    if (json.has("observe_sources")) {
-                        restoreData.observeSources = json.getAsJsonArray("observe_sources").map {
-                            val item = Gson().fromJson(
-                                it.toString().replace("^\"|\"$", ""),
-                                ObserveSourcesItem::class.java
-                            )
-                            item.id = 0L
-                            item
-                        }
-
-                        parsedDataMessage.appendLine("${getString(R.string.observe_sources)}: ${restoreData.observeSources!!.size}")
-                    }
-
-                    showAppRestoreInfoDialog(
-                        onMerge = {
-                            lifecycleScope.launch {
-                                val res = withContext(Dispatchers.IO){
-                                    settingsViewModel.restoreData(restoreData, requireContext())
-                                }
-                                if (res) {
-                                    showRestoreFinishedDialog(restoreData, parsedDataMessage.toString())
-                                }else{
-                                    throw Error()
-                                }
-                            }
-                        },
-                        onReset =  {
-                            lifecycleScope.launch {
-                                val res = withContext(Dispatchers.IO){
-                                    settingsViewModel.restoreData(restoreData, requireContext(),true)
-                                }
-                                if (res) {
-                                    showRestoreFinishedDialog(restoreData, parsedDataMessage.toString())
-                                }else{
-                                    throw Error()
-                                }
-                            }
-                        }
-                    )
-
-                }.onFailure {
-                    it.printStackTrace()
-                    Snackbar.make(requireView(), it.message.toString(), Snackbar.LENGTH_INDEFINITE).show()
+            if (pref is PreferenceGroup) {
+                val childMatches = mutableListOf<HierarchicalPreference>()
+                collectMatchingWithHierarchy(pref, query, childMatches, pref, depth + 1)
+                
+                if (childMatches.isNotEmpty()) {
+                    results.add(HierarchicalPreference(pref, parent, depth, isParent = true))
+                    results.addAll(childMatches)
+                } else if (matches) {
+                    results.add(HierarchicalPreference(pref, parent, depth, isParent = true))
+                }
+            } else {
+                if (matches) {
+                    results.add(HierarchicalPreference(pref, parent, depth, isParent = false))
                 }
             }
-
         }
     }
 
+    private fun buildHierarchicalPreferences(
+        hierarchicalResults: List<HierarchicalPreference>,
+        mainCategory: PreferenceCategory,
+        categoryKey: String,
+        query: String
+    ) {
+        var currentParentCategory: PreferenceCategory? = null
+        var currentParentHasChildren = false
+        
+        hierarchicalResults.forEach { hierPref ->
+            val pref = hierPref.preference
+            
+            if (pref is PreferenceCategory) {
+                if (currentParentCategory != null && currentParentHasChildren) {
+                }
+                
+                currentParentCategory = PreferenceCategory(requireContext()).apply {
+                    title = pref.title
+                    key = "search_sub_${pref.key}_${categoryKey}"
+                }
+                currentParentHasChildren = false
+                
+            } else {
+                val clonedPref = clonePreference(pref, categoryKey)
+                
+                if (currentParentCategory != null && !currentParentHasChildren) {
+                    mainCategory.addPreference(currentParentCategory!!)
+                    currentParentHasChildren = true
+                }
+                
+                if (currentParentCategory != null) {
+                    currentParentCategory!!.addPreference(clonedPref)
+                } else {
+                    mainCategory.addPreference(clonedPref)
+                }
+            }
+        }
+    }
 
+    private fun clonePreference(original: Preference, categoryKey: String): Preference {
+        val cloned = try {
+            original.javaClass.getConstructor(
+                android.content.Context::class.java
+            ).newInstance(requireContext())
+        } catch (e: Exception) {
+            Preference(requireContext())
+        }
+
+        cloned.apply {
+            title = original.title
+            summary = original.summary
+            key = original.key
+            icon = original.icon
+            isEnabled = true
+            isSelectable = true
+            
+            setOnPreferenceClickListener {
+                try {
+                    showNavigationPrompt(original, categoryKey)
+                } catch (e: Exception) {
+                    Log.e("MainSettings", "Error navigating to preference", e)
+                    Toast.makeText(requireContext(), "Cannot navigate to this setting", Toast.LENGTH_SHORT).show()
+                }
+                true
+            }
+        }
+
+        return cloned
+    }
+
+    private fun showNavigationPrompt(pref: Preference, categoryKey: String) {
+        val categoryName = getString(categoryTitles[categoryKey] ?: R.string.settings)
+        val prefTitle = pref.title?.toString() ?: "setting"
+        
+        try {
+            val snackbar = Snackbar.make(
+                requireView(),
+                "$prefTitle is in: $categoryName",
+                Snackbar.LENGTH_LONG
+            )
+            
+            snackbar.setAction("Go") {
+                navigateToPreferenceLocation(pref.key, categoryKey)
+            }
+            
+            val view = snackbar.view
+            
+            val params = view.layoutParams as? androidx.coordinatorlayout.widget.CoordinatorLayout.LayoutParams
+            if (params != null) {
+                params.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+                params.topMargin = 100
+                view.layoutParams = params
+            }
+            
+            snackbar.show()
+        } catch (e: Exception) {
+            showNavigationDialog(pref, categoryKey, categoryName, prefTitle)
+        }
+    }
+    
+    private fun showNavigationDialog(pref: Preference, categoryKey: String, categoryName: String, prefTitle: String) {
+        MaterialAlertDialogBuilder(requireContext())
+            .setTitle("Go to setting")
+            .setMessage("$prefTitle is located in: $categoryName\n\nWould you like to go there?")
+            .setPositiveButton("Go") { _, _ ->
+                navigateToPreferenceLocation(pref.key, categoryKey)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun navigateToPreferenceLocation(prefKey: String?, categoryKey: String) {
+        try {
+            (activity as? SettingsActivity)?.clearSearchFocus()
+            
+            hideKeyboard()
+            
+            restoreNormalView()
+            
+            val navController = findNavController()
+            val action = categoryNavigationActions[categoryKey]
+            
+            if (action != null) {
+                val bundle = Bundle().apply {
+                    putString(ARG_HIGHLIGHT_KEY, prefKey)
+                    putBoolean(ARG_RETURN_TO_SEARCH, false)
+                }
+                navController.navigate(action, bundle)
+            }
+        } catch (e: Exception) {
+            Log.e("MainSettings", "Error navigating to preference location", e)
+            Toast.makeText(requireContext(), "Navigation failed", Toast.LENGTH_SHORT).show()
+        }
+    }
+    
+    private fun hideKeyboard() {
+        val activity = requireActivity()
+        val imm = activity.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
+        activity.currentFocus?.let { view ->
+            imm?.hideSoftInputFromWindow(view.windowToken, 0)
+        }
+    }
+
+    private fun hideEmptyCategoriesInMain() {
+        findPreference<PreferenceCategory>("backup_restore")?.let { category ->
+            val hasVisibleChildren = (0 until category.preferenceCount).any {
+                category.getPreference(it).isVisible
+            }
+            category.isVisible = hasVisibleChildren
+        }
+    }
+    
+    private val backupPathResultLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode == Activity.RESULT_OK) {
+                result.data?.data?.let {
+                    activity?.contentResolver?.takePersistableUriPermission(
+                        it,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                                Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    )
+                    editor.putString("backup_path", it.toString())
+                    editor.apply()
+                    backupPath?.summary = FileUtil.formatPath(it.toString())
+                }
+            }
+        }
+    
+    private val appRestoreResultLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode == Activity.RESULT_OK) {
+                result.data?.data?.let {
+                    val contentResolver = requireContext().contentResolver
+                    contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    val reader = BufferedReader(InputStreamReader(contentResolver.openInputStream(it)))
+                    val content = reader.readText()
+
+                    runCatching {
+                        val json: JsonObject = JsonParser.parseString(content).asJsonObject
+                        val parsedDataMessage = StringBuilder()
+                        val restoreData = RestoreAppDataItem()
+                        
+                        if (json.has("settings")) {
+                            val settings = json.getAsJsonObject("settings")
+                            restoreData.settings = settings.entrySet().map {
+                                val value = it.value.asJsonPrimitive.toString().replace("\"", "")
+                                val type = when(value) {
+                                    "true", "false" -> "boolean"
+                                    else -> "string"
+                                }
+                                BackupSettingsItem(it.key, value, type)
+                            }
+                            parsedDataMessage.appendLine("${getString(R.string.settings)}: ${settings.size()}")
+                        }
+
+                        if (json.has("history")) {
+                            restoreData.downloads = json.getAsJsonArray("history").map {
+                                val item = Gson().fromJson(it.toString().replace("^\"|\"$", ""), HistoryItem::class.java)
+                                item.id = 0L
+                                item
+                            }
+                            parsedDataMessage.appendLine("${getString(R.string.downloads)}: ${restoreData.downloads!!.size}")
+                        }
+
+                        if (json.has("queued")) {
+                            restoreData.queued = json.getAsJsonArray("queued").map {
+                                val item = Gson().fromJson(it.toString().replace("^\"|\"$", ""), DownloadItem::class.java)
+                                item.id = 0L
+                                item
+                            }
+                            parsedDataMessage.appendLine("${getString(R.string.queue)}: ${restoreData.queued!!.size}")
+                        }
+
+                        if (json.has("scheduled")) {
+                            restoreData.scheduled = json.getAsJsonArray("scheduled").map {
+                                val item = Gson().fromJson(it.toString().replace("^\"|\"$", ""), DownloadItem::class.java)
+                                item.id = 0L
+                                item
+                            }
+                            parsedDataMessage.appendLine("${getString(R.string.scheduled)}: ${restoreData.scheduled!!.size}")
+                        }
+
+                        if (json.has("cancelled")) {
+                            restoreData.cancelled = json.getAsJsonArray("cancelled").map {
+                                val item = Gson().fromJson(it.toString().replace("^\"|\"$", ""), DownloadItem::class.java)
+                                item.id = 0L
+                                item
+                            }
+                            parsedDataMessage.appendLine("${getString(R.string.cancelled)}: ${restoreData.cancelled!!.size}")
+                        }
+
+                        if (json.has("errored")) {
+                            restoreData.errored = json.getAsJsonArray("errored").map {
+                                val item = Gson().fromJson(it.toString().replace("^\"|\"$", ""), DownloadItem::class.java)
+                                item.id = 0L
+                                item
+                            }
+                            parsedDataMessage.appendLine("${getString(R.string.errored)}: ${restoreData.errored!!.size}")
+                        }
+
+                        if (json.has("saved")) {
+                            restoreData.saved = json.getAsJsonArray("saved").map {
+                                val item = Gson().fromJson(it.toString().replace("^\"|\"$", ""), DownloadItem::class.java)
+                                item.id = 0L
+                                item
+                            }
+                            parsedDataMessage.appendLine("${getString(R.string.saved)}: ${restoreData.saved!!.size}")
+                        }
+
+                        if (json.has("cookies")) {
+                            restoreData.cookies = json.getAsJsonArray("cookies").map {
+                                val item = Gson().fromJson(it.toString().replace("^\"|\"$", ""), CookieItem::class.java)
+                                item.id = 0L
+                                item
+                            }
+                            parsedDataMessage.appendLine("${getString(R.string.cookies)}: ${restoreData.cookies!!.size}")
+                        }
+
+                        if (json.has("templates")) {
+                            restoreData.templates = json.getAsJsonArray("templates").map {
+                                val item = Gson().fromJson(
+                                    it.toString().replace("^\"|\"$", ""),
+                                    CommandTemplate::class.java
+                                )
+                                item.id = 0L
+                                item
+                            }
+                            parsedDataMessage.appendLine("${getString(R.string.command_templates)}: ${restoreData.templates!!.size}")
+                        }
+
+                        if (json.has("shortcuts")) {
+                            restoreData.shortcuts = json.getAsJsonArray("shortcuts").map {
+                                val item = Gson().fromJson(
+                                    it.toString().replace("^\"|\"$", ""),
+                                    TemplateShortcut::class.java
+                                )
+                                item.id = 0L
+                                item
+                            }
+                            parsedDataMessage.appendLine("${getString(R.string.shortcuts)}: ${restoreData.shortcuts!!.size}")
+                        }
+
+                        if (json.has("search_history")) {
+                            restoreData.searchHistory = json.getAsJsonArray("search_history").map {
+                                val item = Gson().fromJson(
+                                    it.toString().replace("^\"|\"$", ""),
+                                    SearchHistoryItem::class.java
+                                )
+                                item.id = 0L
+                                item
+                            }
+                            parsedDataMessage.appendLine("${getString(R.string.search_history)}: ${restoreData.searchHistory!!.size}")
+                        }
+
+                        if (json.has("observe_sources")) {
+                            restoreData.observeSources = json.getAsJsonArray("observe_sources").map {
+                                val item = Gson().fromJson(
+                                    it.toString().replace("^\"|\"$", ""),
+                                    ObserveSourcesItem::class.java
+                                )
+                                item.id = 0L
+                                item
+                            }
+                            parsedDataMessage.appendLine("${getString(R.string.observe_sources)}: ${restoreData.observeSources!!.size}")
+                        }
+
+                        showAppRestoreInfoDialog(
+                            onMerge = {
+                                lifecycleScope.launch {
+                                    val res = withContext(Dispatchers.IO){
+                                        settingsViewModel.restoreData(restoreData, requireContext())
+                                    }
+                                    if (res) {
+                                        showRestoreFinishedDialog(restoreData, parsedDataMessage.toString())
+                                    }else{
+                                        throw Error()
+                                    }
+                                }
+                            },
+                            onReset =  {
+                                lifecycleScope.launch {
+                                    val res = withContext(Dispatchers.IO){
+                                        settingsViewModel.restoreData(restoreData, requireContext(),true)
+                                    }
+                                    if (res) {
+                                        showRestoreFinishedDialog(restoreData, parsedDataMessage.toString())
+                                    }else{
+                                        throw Error()
+                                    }
+                                }
+                            }
+                        )
+
+                    }.onFailure {
+                        it.printStackTrace()
+                        Snackbar.make(requireView(), it.message.toString(), Snackbar.LENGTH_INDEFINITE).show()
+                    }
+                }
+
+            }
+        }
 
     @SuppressLint("RestrictedApi")
     private fun showAppRestoreInfoDialog(onMerge: () -> Unit, onReset: () -> Unit){
@@ -480,7 +768,6 @@ class MainSettingsFragment : PreferenceFragmentCompat() {
             onReset()
             dialog?.dismiss()
         }
-
 
         val dialog = builder.create()
         dialog.show()
