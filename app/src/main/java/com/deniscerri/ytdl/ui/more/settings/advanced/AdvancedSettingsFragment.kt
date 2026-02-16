@@ -14,16 +14,17 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.deniscerri.ytdl.R
 import com.deniscerri.ytdl.ui.adapter.SortableTextItemAdapter
-import com.deniscerri.ytdl.ui.more.settings.BaseSettingsFragment
+import com.deniscerri.ytdl.ui.more.settings.SearchableSettingsFragment
 import com.deniscerri.ytdl.util.UiUtil
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 
 
-class AdvancedSettingsFragment : BaseSettingsFragment() {
+class AdvancedSettingsFragment : SearchableSettingsFragment() {
     override val title: Int = R.string.advanced
     @SuppressLint("RestrictedApi")
     override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
         setPreferencesFromResource(R.xml.advanced_preferences, rootKey)
+        buildPreferenceList(preferenceScreen)
         val prefs = PreferenceManager.getDefaultSharedPreferences(requireActivity())
         val editor = prefs.edit()
 
