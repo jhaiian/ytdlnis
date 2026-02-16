@@ -13,7 +13,7 @@ import com.deniscerri.ytdl.BuildConfig
 import com.deniscerri.ytdl.R
 import com.deniscerri.ytdl.database.viewmodel.SettingsViewModel
 import com.deniscerri.ytdl.database.viewmodel.YTDLPViewModel
-import com.deniscerri.ytdl.ui.more.settings.BaseSettingsFragment
+import com.deniscerri.ytdl.ui.more.settings.SearchableSettingsFragment
 import com.deniscerri.ytdl.util.UiUtil
 import com.deniscerri.ytdl.util.UpdateUtil
 import com.google.android.material.snackbar.Snackbar
@@ -22,7 +22,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 
-class UpdateSettingsFragment : BaseSettingsFragment() {
+class UpdateSettingsFragment : SearchableSettingsFragment() {
     override val title: Int = R.string.updating
     private var updateYTDL: Preference? = null
     private var ytdlVersion: Preference? = null
@@ -36,6 +36,7 @@ class UpdateSettingsFragment : BaseSettingsFragment() {
 
     override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
         setPreferencesFromResource(R.xml.updating_preferences, rootKey)
+        buildPreferenceList(preferenceScreen)
         updateUtil = UpdateUtil(requireContext())
         preferences = PreferenceManager.getDefaultSharedPreferences(requireContext())
         updateYTDL = findPreference("update_ytdl")
