@@ -4,6 +4,8 @@ import android.animation.ArgbEvaluator
 import android.animation.ValueAnimator
 import android.graphics.Color
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Switch
@@ -19,7 +21,6 @@ abstract class SearchableSettingsFragment : BaseSettingsFragment() {
     private var shouldReturnToSearch: Boolean = false
     private var highlightRetryCount = 0
     private val MAX_HIGHLIGHT_RETRIES = 5
-    private var currentOverlay: View? = null
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -37,20 +38,28 @@ abstract class SearchableSettingsFragment : BaseSettingsFragment() {
     }
     
     private fun highlightPreference(key: String) {
-        view?.postDelayed({
-            if (!isAdded || view == null) return@postDelayed
-            val preference = findPreference<Preference>(key) ?: return@postDelayed
-            expandParentCategory(preference)
-            view?.postDelayed({
-                if (!isAdded || view == null) return@postDelayed
-                scrollToPreferenceCenter(preference)
-                view?.postDelayed({
-                    if (isAdded && view != null) {
-                        highlightPreferenceView(preference)
-                        highlightKey = null
-                    }
-                }, 600)
-            }, 100)
+        Handler(Looper.getMainLooper()).postDelayed({
+            try {
+                if (!isAdded || view == null) {
+                    return@postDelayed
+                }
+                val preference = findPreference<Preference>(key)
+                if (preference != null) {
+                    expandParentCategory(preference)
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        if (!isAdded || view == null) return@postDelayed
+                        scrollToPreferenceCenter(preference)
+                        Handler(Looper.getMainLooper()).postDelayed({
+                            if (isAdded && view != null) {
+                                highlightPreferenceView(preference)
+                                highlightKey = null
+                            }
+                        }, 600)
+                    }, 100)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }, 300)
     }
     
@@ -73,139 +82,143 @@ abstract class SearchableSettingsFragment : BaseSettingsFragment() {
     }
     
     private fun highlightPreferenceView(preference: Preference) {
-        if (!isAdded || view == null) return
-        
-        if (highlightRetryCount >= MAX_HIGHLIGHT_RETRIES) {
-            highlightRetryCount = 0
-            return
-        }
-        
-        val recyclerView = listView as? RecyclerView ?: return
-        if (!recyclerView.isLaidOut) {
-            recyclerView.post { highlightPreferenceView(preference) }
-            return
-        }
-        
-        for (i in 0 until recyclerView.childCount) {
-            val child = recyclerView.getChildAt(i) ?: continue
-            val holder = recyclerView.getChildViewHolder(child)
-            val adapterPosition = holder.bindingAdapterPosition
-            if (adapterPosition != RecyclerView.NO_POSITION) {
-                val boundPreference = try {
-                    val adapter = recyclerView.adapter
-                    if (adapter != null && adapterPosition < adapter.itemCount) {
-                        val method = adapter.javaClass.getMethod("getItem", Int::class.java)
-                        method.invoke(adapter, adapterPosition) as? Preference
-                    } else null
-                } catch (e: Exception) {
-                    null
+        try {
+            if (!isAdded || view == null) return
+            
+            if (highlightRetryCount >= MAX_HIGHLIGHT_RETRIES) {
+                highlightRetryCount = 0
+                return
+            }
+            
+            val recyclerView = listView as? RecyclerView ?: return
+            if (!recyclerView.isLaidOut) {
+                recyclerView.post {
+                    highlightPreferenceView(preference)
                 }
-                if (boundPreference?.key == preference.key) {
-                    if (child.isAttachedToWindow) {
+                return
+            }
+            
+            for (i in 0 until recyclerView.childCount) {
+                val child = recyclerView.getChildAt(i) ?: continue
+                
+                val holder = recyclerView.getChildViewHolder(child)
+                val adapterPosition = holder.bindingAdapterPosition
+                
+                if (adapterPosition != RecyclerView.NO_POSITION) {
+                    val boundPreference = try {
+                        val adapter = recyclerView.adapter
+                        if (adapter != null && adapterPosition < adapter.itemCount) {
+                            val method = adapter.javaClass.getMethod("getItem", Int::class.java)
+                            method.invoke(adapter, adapterPosition) as? Preference
+                        } else null
+                    } catch (e: Exception) {
+                        null
+                    }
+                    
+                    if (boundPreference?.key == preference.key) {
                         animateHighlight(child, preference)
                         highlightRetryCount = 0
-                    } else {
-                        child.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
-                            override fun onViewAttachedToWindow(v: View) {
-                                v.removeOnAttachStateChangeListener(this)
-                                animateHighlight(v, preference)
-                            }
-                            override fun onViewDetachedFromWindow(v: View) {}
-                        })
+                        return
                     }
-                    return
                 }
             }
+            
+            highlightRetryCount++
+            recyclerView.postDelayed({
+                if (isAdded && view != null) {
+                    highlightPreferenceView(preference)
+                }
+            }, 200)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            highlightRetryCount = 0
         }
-        
-        highlightRetryCount++
-        recyclerView.postDelayed({
-            if (isAdded && view != null) {
-                highlightPreferenceView(preference)
-            }
-        }, 200)
     }
     
     private fun animateHighlight(view: View, preference: Preference) {
-        if (!isAdded || !view.isAttachedToWindow) return
-        
-        val isSwitchPreference = preference is androidx.preference.SwitchPreferenceCompat ||
-                preference is androidx.preference.SwitchPreference
-        
-        if (isSwitchPreference) {
-            animateSwitchHighlight(view)
-        } else {
-            animateOverlayHighlight(view)
-        }
-    }
-    
-    private fun animateSwitchHighlight(view: View) {
-        val switchView = findSwitchInView(view) ?: view
-        listOf(0L, 200L, 400L, 600L).forEach { delay ->
-            switchView.postDelayed({
-                if (isAdded && switchView.isAttachedToWindow) {
-                    switchView.isPressed = true
-                    switchView.postDelayed({
-                        if (isAdded) switchView.isPressed = false
-                    }, 150)
-                }
-            }, delay)
-        }
-    }
-    
-    private fun animateOverlayHighlight(view: View) {
-        val parent = view.parent as? ViewGroup ?: return
-        val overlay = View(requireContext()).apply {
-            setBackgroundColor(Color.parseColor("#33000000"))
-            alpha = 0f
-            layoutParams = ViewGroup.LayoutParams(view.width, view.height)
-        }
-        currentOverlay = overlay
-        
-        val index = parent.indexOfChild(view)
-        parent.addView(overlay, index, view.layoutParams)
-        
-        fun removeOverlay() {
-            if (overlay.parent != null) {
-                parent.removeView(overlay)
-            }
-            if (currentOverlay == overlay) {
-                currentOverlay = null
-            }
-        }
-        
-        overlay.animate()
-            .alpha(0.4f)
-            .setDuration(150)
-            .withEndAction {
-                overlay.animate()
-                    .alpha(0f)
-                    .setDuration(150)
-                    .withEndAction {
-                        overlay.animate()
-                            .alpha(0.4f)
-                            .setDuration(150)
-                            .withEndAction {
-                                overlay.animate()
-                                    .alpha(0f)
-                                    .setDuration(150)
-                                    .withEndAction {
-                                        overlay.animate()
-                                            .alpha(0.4f)
-                                            .setDuration(150)
-                                            .withEndAction {
-                                                overlay.animate()
-                                                    .alpha(0f)
-                                                    .setDuration(150)
-                                                    .withEndAction {
-                                                        removeOverlay()
-                                                    }
-                                            }
-                                    }
-                            }
+        try {
+            if (!isAdded || this.view == null) return
+            
+            val isSwitchPreference = preference is androidx.preference.SwitchPreferenceCompat || 
+                                     preference is androidx.preference.SwitchPreference
+            
+            if (isSwitchPreference) {
+                val targetView = view
+                targetView.isPressed = true
+                targetView.postDelayed({
+                    if (isAdded) {
+                        targetView.isPressed = false
                     }
+                }, 200)
+                
+                targetView.postDelayed({
+                    if (isAdded) {
+                        targetView.isPressed = true
+                        targetView.postDelayed({ 
+                            if (isAdded) targetView.isPressed = false 
+                        }, 200)
+                    }
+                }, 400)
+                
+                targetView.postDelayed({
+                    if (isAdded) {
+                        targetView.isPressed = true
+                        targetView.postDelayed({ 
+                            if (isAdded) targetView.isPressed = false 
+                        }, 200)
+                    }
+                }, 800)
+            } else {
+                val transparentColor = Color.TRANSPARENT
+                val highlightColor = Color.parseColor("#33000000")
+                
+                animateBackgroundColor(view, transparentColor, highlightColor, 150) {
+                    animateBackgroundColor(view, highlightColor, transparentColor, 150) {
+                        view.postDelayed({
+                            if (isAdded) {
+                                animateBackgroundColor(view, transparentColor, highlightColor, 150) {
+                                    animateBackgroundColor(view, highlightColor, transparentColor, 150) {
+                                        view.postDelayed({
+                                            if (isAdded) {
+                                                animateBackgroundColor(view, transparentColor, highlightColor, 150) {
+                                                    animateBackgroundColor(view, highlightColor, transparentColor, 150)
+                                                }
+                                            }
+                                        }, 150)
+                                    }
+                                }
+                            }
+                        }, 150)
+                    }
+                }
             }
-            .start()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+    
+    private fun animateBackgroundColor(view: View, fromColor: Int, toColor: Int, duration: Long, onEnd: (() -> Unit)? = null) {
+        try {
+            val colorAnimation = ValueAnimator.ofObject(ArgbEvaluator(), fromColor, toColor)
+            colorAnimation.duration = duration
+            colorAnimation.addUpdateListener { animator ->
+                if (isAdded) {
+                    view.setBackgroundColor(animator.animatedValue as Int)
+                }
+            }
+            colorAnimation.addListener(object : android.animation.Animator.AnimatorListener {
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    onEnd?.invoke()
+                }
+                override fun onAnimationStart(animation: android.animation.Animator) {}
+                override fun onAnimationCancel(animation: android.animation.Animator) {}
+                override fun onAnimationRepeat(animation: android.animation.Animator) {}
+            })
+            colorAnimation.start()
+        } catch (e: Exception) {
+            e.printStackTrace()
+            onEnd?.invoke()
+        }
     }
     
     private fun findSwitchInView(view: View): View? {
@@ -224,10 +237,7 @@ abstract class SearchableSettingsFragment : BaseSettingsFragment() {
     open fun onBackPressed(): Boolean {
         highlightKey = null
         highlightRetryCount = 0
-        currentOverlay?.let {
-            (it.parent as? ViewGroup)?.removeView(it)
-            currentOverlay = null
-        }
+        
         if (shouldReturnToSearch) {
             findNavController().popBackStack()
             return true
@@ -236,12 +246,8 @@ abstract class SearchableSettingsFragment : BaseSettingsFragment() {
     }
     
     override fun onDestroyView() {
-        currentOverlay?.let {
-            (it.parent as? ViewGroup)?.removeView(it)
-            currentOverlay = null
-        }
+        super.onDestroyView()
         highlightKey = null
         highlightRetryCount = 0
-        super.onDestroyView()
     }
 }
