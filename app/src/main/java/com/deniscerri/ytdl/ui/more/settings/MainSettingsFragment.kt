@@ -74,6 +74,7 @@ class MainSettingsFragment : BaseSettingsFragment() {
 
     private lateinit var settingsViewModel: SettingsViewModel
     private lateinit var editor: SharedPreferences.Editor
+    private lateinit var searchManager: SettingsSearchManager
 
     private val searchCategories = mutableMapOf<String, PreferenceCategory>()
     private var isSearchMode = false
@@ -188,6 +189,9 @@ class MainSettingsFragment : BaseSettingsFragment() {
             }
         }
         settingsViewModel = ViewModelProvider(this)[SettingsViewModel::class.java]
+        
+        searchManager = SettingsSearchManager(this, categoryFragmentMap, categoryTitles)
+        searchManager.initializeCache()
 
         backup = findPreference("backup")
         restore = findPreference("restore")
@@ -299,8 +303,66 @@ class MainSettingsFragment : BaseSettingsFragment() {
 
         lastSearchQuery = query
         
-        // Use old reliable method for immediate results
-        enterSearchMode(query.lowercase())
+        // Use debounced search for better performance
+        searchManager.searchWithDebounce(query) { smartMatches ->
+            // Combine with traditional deep search for reliability
+            enterSearchModeEnhanced(query.lowercase(), smartMatches)
+        }
+    }
+    
+    private fun enterSearchModeEnhanced(query: String, smartMatches: List<SearchMatch>) {
+        isSearchMode = true
+        
+        appearance?.isVisible = false
+        folders?.isVisible = false
+        downloading?.isVisible = false
+        processing?.isVisible = false
+        updating?.isVisible = false
+        advanced?.isVisible = false
+        
+        searchCategories.values.forEach { category ->
+            preferenceScreen.removePreference(category)
+        }
+        searchCategories.clear()
+
+        // Use traditional search to ensure we find everything
+        categoryFragmentMap.forEach { (categoryKey, xmlRes) ->
+            val hierarchicalResults = findMatchingPreferencesWithHierarchy(xmlRes, query)
+            
+            if (hierarchicalResults.isNotEmpty()) {
+                val mainCategory = PreferenceCategory(requireContext()).apply {
+                    title = getString(categoryTitles[categoryKey] ?: R.string.settings)
+                    key = "search_main_$categoryKey"
+                }
+                
+                preferenceScreen.addPreference(mainCategory)
+                
+                // Sort results using smart scoring if available
+                val sortedResults = sortWithSmartScoring(hierarchicalResults, smartMatches, categoryKey)
+                buildHierarchicalPreferences(sortedResults, mainCategory, categoryKey, query)
+                
+                searchCategories[categoryKey] = mainCategory
+            }
+        }
+
+        super.filterPreferences(query)
+        hideEmptyCategoriesInMain()
+    }
+    
+    private fun sortWithSmartScoring(
+        results: List<HierarchicalPreference>,
+        smartMatches: List<SearchMatch>,
+        categoryKey: String
+    ): List<HierarchicalPreference> {
+        // Create a score map from smart matches
+        val scoreMap = smartMatches
+            .filter { it.data.categoryKey == categoryKey }
+            .associateBy({ it.data.key }, { it.score })
+        
+        // Sort results by smart score if available, otherwise keep original order
+        return results.sortedByDescending { hierPref ->
+            scoreMap[hierPref.preference.key] ?: 0f
+        }
     }
 
     private fun restoreNormalView() {
@@ -799,5 +861,10 @@ class MainSettingsFragment : BaseSettingsFragment() {
 
         val dialog = builder.create()
         dialog.show()
+    }
+    
+    override fun onDestroyView() {
+        super.onDestroyView()
+        searchManager.clearCache()
     }
 }
