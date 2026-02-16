@@ -74,11 +74,10 @@ class MainSettingsFragment : BaseSettingsFragment() {
 
     private lateinit var settingsViewModel: SettingsViewModel
     private lateinit var editor: SharedPreferences.Editor
-    private lateinit var searchManager: SettingsSearchManager
 
-    val searchCategories = mutableMapOf<String, PreferenceCategory>()
-    var isSearchMode = false
-    var lastSearchQuery: String = ""
+    private val searchCategories = mutableMapOf<String, PreferenceCategory>()
+    private var isSearchMode = false
+    private var lastSearchQuery: String = ""
 
     private val categoryFragmentMap = mapOf(
         "appearance" to R.xml.general_preferences,
@@ -189,8 +188,6 @@ class MainSettingsFragment : BaseSettingsFragment() {
             }
         }
         settingsViewModel = ViewModelProvider(this)[SettingsViewModel::class.java]
-        searchManager = SettingsSearchManager(this, categoryFragmentMap, categoryTitles)
-        searchManager.initializeCache()
 
         backup = findPreference("backup")
         restore = findPreference("restore")
@@ -301,9 +298,9 @@ class MainSettingsFragment : BaseSettingsFragment() {
         }
 
         lastSearchQuery = query
-        searchManager.searchWithDebounce(query) { matches ->
-            displaySearchResults(matches)
-        }
+        
+        // Use old reliable method for immediate results
+        enterSearchMode(query.lowercase())
     }
 
     private fun restoreNormalView() {
@@ -324,92 +321,6 @@ class MainSettingsFragment : BaseSettingsFragment() {
         advanced?.isVisible = true
         
         findPreference<PreferenceCategory>("backup_restore")?.isVisible = true
-    }
-
-    private fun displaySearchResults(matches: List<SearchMatch>) {
-        if (matches.isEmpty()) {
-            showNoResultsView()
-            return
-        }
-        
-        searchCategories.values.forEach { category ->
-            preferenceScreen.removePreference(category)
-        }
-        searchCategories.clear()
-        
-        isSearchMode = true
-        appearance?.isVisible = false
-        folders?.isVisible = false
-        downloading?.isVisible = false
-        processing?.isVisible = false
-        updating?.isVisible = false
-        advanced?.isVisible = false
-        
-        val matchesByCategory = matches.groupBy { it.data.categoryKey }
-        
-        matchesByCategory.forEach { (categoryKey, categoryMatches) ->
-            val mainCategory = PreferenceCategory(requireContext()).apply {
-                title = getString(categoryTitles[categoryKey] ?: R.string.settings)
-                key = "search_main_$categoryKey"
-            }
-            
-            preferenceScreen.addPreference(mainCategory)
-            
-            categoryMatches.forEach { match ->
-                val clonedPref = createSearchPreference(match.data, categoryKey)
-                mainCategory.addPreference(clonedPref)
-            }
-            
-            searchCategories[categoryKey] = mainCategory
-        }
-        
-        hideEmptyCategoriesInMain()
-    }
-    
-    private fun createSearchPreference(data: PreferenceSearchData, categoryKey: String): Preference {
-        val cloned = try {
-            data.originalPreference.javaClass.getConstructor(
-                android.content.Context::class.java
-            ).newInstance(requireContext())
-        } catch (e: Exception) {
-            Preference(requireContext())
-        }
-        
-        cloned.apply {
-            title = data.title
-            summary = data.summary
-            key = data.key
-            icon = data.originalPreference.icon
-            isEnabled = true
-            isSelectable = true
-            
-            setOnPreferenceClickListener {
-                try {
-                    showNavigationPrompt(this, categoryKey)
-                } catch (e: Exception) {
-                    Log.e("MainSettings", "Error navigating to preference", e)
-                    Toast.makeText(requireContext(), "Cannot navigate to this setting", Toast.LENGTH_SHORT).show()
-                }
-                true
-            }
-        }
-        
-        return cloned
-    }
-    
-    private fun showNoResultsView() {
-        searchCategories.values.forEach { category ->
-            preferenceScreen.removePreference(category)
-        }
-        searchCategories.clear()
-        
-        isSearchMode = true
-        appearance?.isVisible = false
-        folders?.isVisible = false
-        downloading?.isVisible = false
-        processing?.isVisible = false
-        updating?.isVisible = false
-        advanced?.isVisible = false
     }
 
     private fun enterSearchMode(query: String) {
@@ -568,7 +479,7 @@ class MainSettingsFragment : BaseSettingsFragment() {
         return cloned
     }
 
-    fun showNavigationPrompt(pref: Preference, categoryKey: String) {
+    private fun showNavigationPrompt(pref: Preference, categoryKey: String) {
         val categoryName = getString(categoryTitles[categoryKey] ?: R.string.settings)
         val prefTitle = pref.title?.toString() ?: "setting"
         
@@ -888,10 +799,5 @@ class MainSettingsFragment : BaseSettingsFragment() {
 
         val dialog = builder.create()
         dialog.show()
-    }
-    
-    override fun onDestroyView() {
-        super.onDestroyView()
-        searchManager.clearCache()
     }
 }
