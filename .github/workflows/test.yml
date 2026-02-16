@@ -4,8 +4,11 @@ env:
   main_project_module: app
 
 on:
+  push:
+    branches:
+      - test
   workflow_dispatch:
-
+  
 jobs:
   build:
     runs-on: ubuntu-latest
