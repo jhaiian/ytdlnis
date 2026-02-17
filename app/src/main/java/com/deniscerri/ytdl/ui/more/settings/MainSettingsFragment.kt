@@ -296,16 +296,14 @@ class MainSettingsFragment : BaseSettingsFragment() {
     }
 
     override fun filterPreferences(query: String) {
-        if (query.isEmpty()) {
+        if (query.isBlank()) {
             restoreNormalView()
             return
         }
 
         lastSearchQuery = query
-        
-        // Use debounced search for better performance
+
         searchManager.searchWithDebounce(query) { smartMatches ->
-            // Combine with traditional deep search for reliability
             enterSearchModeEnhanced(query.lowercase(), smartMatches)
         }
     }
@@ -368,7 +366,8 @@ class MainSettingsFragment : BaseSettingsFragment() {
     private fun restoreNormalView() {
         isSearchMode = false
         lastSearchQuery = ""
-        
+        searchManager.cancelSearch()
+
         searchCategories.values.forEach { category ->
             preferenceScreen.removePreference(category)
         }
