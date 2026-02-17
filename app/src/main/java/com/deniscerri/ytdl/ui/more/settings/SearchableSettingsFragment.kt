@@ -242,20 +242,14 @@ abstract class SearchableSettingsFragment : BaseSettingsFragment() {
     private fun animateHighlight(view: View, preference: Preference) {
         try {
             if (!isAdded || this.view == null) return
-            
+
             view.setLayerType(View.LAYER_TYPE_HARDWARE, null)
-            
-            val isSwitchPreference = preference is androidx.preference.SwitchPreferenceCompat ||
-                    preference is androidx.preference.SwitchPreference
-            
+
             viewLifecycleOwner.lifecycleScope.launch {
                 try {
-                    if (isSwitchPreference) {
-                        animateSwitchHighlight(view)
-                    } else {
-                        animateBackgroundHighlight(view)
-                    }
-                    
+                    // All preference types use the same pressed-ripple pulse effect
+                    animateSwitchHighlight(view)
+
                     delay(1500)
                     if (isAdded) {
                         view.setLayerType(View.LAYER_TYPE_NONE, null)
