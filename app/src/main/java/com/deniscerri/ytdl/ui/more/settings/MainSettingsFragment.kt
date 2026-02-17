@@ -677,9 +677,6 @@ class MainSettingsFragment : BaseSettingsFragment() {
         val textColor = textTypedArray.getColor(0, 0xFFFFFFFF.toInt())
         textTypedArray.recycle()
 
-        snackbarView.background = androidx.core.content.ContextCompat.getDrawable(
-            requireContext(), com.google.android.material.R.drawable.m3_snackbar_background
-        )
         snackbarView.backgroundTintList = android.content.res.ColorStateList.valueOf(bgColor)
 
         snackbar.setTextColor(textColor)
