@@ -366,7 +366,7 @@ class MainSettingsFragment : BaseSettingsFragment() {
     private fun restoreNormalView() {
         isSearchMode = false
         lastSearchQuery = ""
-        searchManager.cancelSearch()
+        searchManager.cancelPendingSearch()
 
         searchCategories.values.forEach { category ->
             preferenceScreen.removePreference(category)
