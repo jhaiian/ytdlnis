@@ -184,6 +184,7 @@ class SettingsSearchManager(
             val keyLower = data.key.lowercase()
             val categoryLower = data.categoryTitle.lowercase()
             
+            // Exact and partial matching for title
             when {
                 titleLower == queryLower -> {
                     matchedFields.add(MatchField.TITLE_EXACT)
@@ -197,8 +198,24 @@ class SettingsSearchManager(
                     matchedFields.add(MatchField.TITLE_CONTAINS)
                     score += MatchField.TITLE_CONTAINS.weight
                 }
+                // Check if query matches without plural 's' or 'es'
+                checkPluralMatch(titleLower, queryLower) -> {
+                    matchedFields.add(MatchField.TITLE_CONTAINS)
+                    score += MatchField.TITLE_CONTAINS.weight * 0.95f // Slightly lower score
+                }
+                else -> {
+                    // Check each word individually for close matches
+                    val titleWords = titleLower.split(" ", "-", "_", "(", ")", "[", "]")
+                    titleWords.forEach { word ->
+                        if (word.length >= 3 && isCloseMatch(word, queryLower)) {
+                            matchedFields.add(MatchField.TITLE_CONTAINS)
+                            score += MatchField.TITLE_CONTAINS.weight * 0.85f
+                        }
+                    }
+                }
             }
             
+            // Exact and partial matching for key
             when {
                 keyLower == queryLower -> {
                     matchedFields.add(MatchField.KEY_EXACT)
@@ -208,8 +225,13 @@ class SettingsSearchManager(
                     matchedFields.add(MatchField.KEY_CONTAINS)
                     score += MatchField.KEY_CONTAINS.weight
                 }
+                checkPluralMatch(keyLower, queryLower) -> {
+                    matchedFields.add(MatchField.KEY_CONTAINS)
+                    score += MatchField.KEY_CONTAINS.weight * 0.95f
+                }
             }
             
+            // Exact and partial matching for summary
             when {
                 summaryLower == queryLower -> {
                     matchedFields.add(MatchField.SUMMARY_EXACT)
@@ -219,25 +241,54 @@ class SettingsSearchManager(
                     matchedFields.add(MatchField.SUMMARY_CONTAINS)
                     score += MatchField.SUMMARY_CONTAINS.weight
                 }
+                checkPluralMatch(summaryLower, queryLower) -> {
+                    matchedFields.add(MatchField.SUMMARY_CONTAINS)
+                    score += MatchField.SUMMARY_CONTAINS.weight * 0.95f
+                }
+                else -> {
+                    // Check each word in summary
+                    val summaryWords = summaryLower.split(" ", "-", "_", "(", ")", "[", "]")
+                    summaryWords.forEach { word ->
+                        if (word.length >= 3 && isCloseMatch(word, queryLower)) {
+                            matchedFields.add(MatchField.SUMMARY_CONTAINS)
+                            score += MatchField.SUMMARY_CONTAINS.weight * 0.80f
+                        }
+                    }
+                }
             }
             
+            // Category matching
             if (categoryLower.contains(queryLower)) {
                 matchedFields.add(MatchField.CATEGORY_MATCH)
                 score += MatchField.CATEGORY_MATCH.weight
             }
             
+            // Enhanced fuzzy matching for typos (more lenient)
             if (matchedFields.isEmpty() && query.length >= 3) {
-                val fuzzyScore = calculateFuzzyScore(titleLower, queryLower)
-                if (fuzzyScore > 0.6f) {
+                // Check each word in title for fuzzy match
+                val titleWords = titleLower.split(" ", "-", "_")
+                var bestFuzzyScore = 0f
+                
+                titleWords.forEach { word ->
+                    val fuzzyScore = calculateFuzzyScore(word, queryLower)
+                    if (fuzzyScore > bestFuzzyScore) {
+                        bestFuzzyScore = fuzzyScore
+                    }
+                }
+                
+                // Very lenient threshold for maximum typo tolerance
+                if (bestFuzzyScore > 0.4f) {  // Lowered from 0.5 to 0.4 for better tolerance
                     matchedFields.add(MatchField.FUZZY_MATCH)
-                    score += MatchField.FUZZY_MATCH.weight * fuzzyScore
+                    score += MatchField.FUZZY_MATCH.weight * bestFuzzyScore
                 }
             }
             
+            // Bonus for shorter, more specific titles
             if (matchedFields.isNotEmpty() && data.title.length < 50) {
                 score *= (1f + (50f - data.title.length) / 100f)
             }
             
+            // Bonus for top-level preferences
             if (data.depth == 0 && matchedFields.isNotEmpty()) {
                 score *= 1.2f
             }
@@ -248,6 +299,68 @@ class SettingsSearchManager(
         }
         
         return matches.sortedByDescending { it.score }
+    }
+    
+    /**
+     * Check if query matches text with plural variations and small typos
+     * Examples: "subtitle" matches "subtitles", "video" matches "videos"
+     * "themm" matches "theme", "downlod" matches "download"
+     */
+    private fun checkPluralMatch(text: String, query: String): Boolean {
+        // Direct substring check with plural variations
+        if (text.contains("${query}s") || text.contains("${query}es")) return true
+        if (query.endsWith("s") && text.contains(query.dropLast(1))) return true
+        if (query.endsWith("es") && text.contains(query.dropLast(2))) return true
+        
+        // Check individual words with fuzzy tolerance
+        val textWords = text.split(" ", "-", "_", "(", ")", "[", "]")
+        val queryWords = query.split(" ", "-", "_")
+        
+        queryWords.forEach { queryWord ->
+            if (queryWord.length < 3) return@forEach // Skip short words
+            
+            textWords.forEach { textWord ->
+                if (textWord.length < 3) return@forEach // Skip short words
+                
+                // Check if one is substring of other with small variation
+                if (isCloseMatch(textWord, queryWord)) {
+                    return true
+                }
+            }
+        }
+        
+        return false
+    }
+    
+    /**
+     * Check if two words are close matches (1-2 character difference)
+     */
+    private fun isCloseMatch(text: String, query: String): Boolean {
+        // One contains the other and difference is small
+        if (text.contains(query) || query.contains(text)) {
+            val diff = Math.abs(text.length - query.length)
+            return diff <= 2
+        }
+        
+        // Same length with 1 different character
+        if (text.length == query.length && text.length >= 3) {
+            var differences = 0
+            for (i in text.indices) {
+                if (text[i] != query[i]) differences++
+                if (differences > 1) return false
+            }
+            return differences == 1
+        }
+        
+        // Check Levenshtein distance for close matches
+        if (text.length >= 4 && query.length >= 4) {
+            val distance = levenshteinDistance(text, query)
+            val maxLength = maxOf(text.length, query.length)
+            val similarity = 1f - (distance.toFloat() / maxLength)
+            return similarity >= 0.70f // 70% similar (lowered from 75%)
+        }
+        
+        return false
     }
     
     private fun calculateFuzzyScore(target: String, query: String): Float {
