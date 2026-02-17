@@ -11,6 +11,7 @@ import androidx.appcompat.widget.SwitchCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.navigation.fragment.findNavController
 import androidx.preference.Preference
+import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.materialswitch.MaterialSwitch
 import kotlinx.coroutines.*
@@ -27,7 +28,7 @@ abstract class SearchableSettingsFragment : BaseSettingsFragment() {
         private const val MAX_HIGHLIGHT_RETRIES = 8
         private const val INITIAL_HIGHLIGHT_DELAY = 300L
         private const val EXPAND_DELAY = 150L
-        private const val SCROLL_DELAY = 500L
+        private const val SCROLL_DELAY = 600L
         private const val BASE_RETRY_DELAY = 150L
         private const val MAX_RETRY_DELAY = 1000L
     }
@@ -98,12 +99,98 @@ abstract class SearchableSettingsFragment : BaseSettingsFragment() {
         }
     }
     
-    private fun scrollToPreferenceCenter(preference: Preference) {
+    private suspend fun scrollToPreferenceCenter(preference: Preference) {
+        withContext(Dispatchers.Main) {
+            try {
+                val recyclerView = listView as? RecyclerView ?: return@withContext
+                
+                // First scroll to make item visible
+                scrollToPreference(preference)
+                
+                // Wait a bit for the scroll to start
+                delay(100)
+                
+                // Find the preference position in the adapter
+                val position = findPreferenceAdapterPosition(preference, recyclerView)
+                
+                if (position >= 0) {
+                    val layoutManager = recyclerView.layoutManager as? LinearLayoutManager
+                    
+                    if (layoutManager != null) {
+                        // Calculate the offset to center the item
+                        val recyclerHeight = recyclerView.height
+                        
+                        // Post to ensure layout is complete
+                        recyclerView.post {
+                            try {
+                                val itemView = layoutManager.findViewByPosition(position)
+                                
+                                if (itemView != null) {
+                                    // Item is visible, calculate center offset
+                                    val itemHeight = itemView.height
+                                    val centerOffset = (recyclerHeight - itemHeight) / 2
+                                    
+                                    // Scroll to position with center offset
+                                    layoutManager.scrollToPositionWithOffset(position, centerOffset)
+                                } else {
+                                    // Item not yet visible, scroll to position first
+                                    layoutManager.scrollToPosition(position)
+                                    
+                                    // Then try to center it after a delay
+                                    recyclerView.postDelayed({
+                                        val view = layoutManager.findViewByPosition(position)
+                                        if (view != null) {
+                                            val itemHeight = view.height
+                                            val centerOffset = (recyclerHeight - itemHeight) / 2
+                                            val currentOffset = view.top
+                                            val scrollAmount = currentOffset - centerOffset
+                                            
+                                            recyclerView.smoothScrollBy(0, scrollAmount)
+                                        }
+                                    }, 50)
+                                }
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                            }
+                        }
+                    } else {
+                        // Fallback to standard scroll
+                        scrollToPreference(preference)
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                // Fallback to standard scroll
+                try {
+                    scrollToPreference(preference)
+                } catch (ex: Exception) {
+                    ex.printStackTrace()
+                }
+            }
+        }
+    }
+    
+    private fun findPreferenceAdapterPosition(preference: Preference, recyclerView: RecyclerView): Int {
         try {
-            scrollToPreference(preference)
+            val adapter = recyclerView.adapter ?: return -1
+            
+            for (i in 0 until adapter.itemCount) {
+                try {
+                    val method = adapter.javaClass.getMethod("getItem", Int::class.java)
+                    val item = method.invoke(adapter, i) as? Preference
+                    
+                    if (item?.key == preference.key) {
+                        return i
+                    }
+                } catch (e: Exception) {
+                    continue
+                }
+            }
         } catch (e: Exception) {
             e.printStackTrace()
         }
+        
+        return -1
     }
     
     private fun expandParentCategory(preference: Preference) {
