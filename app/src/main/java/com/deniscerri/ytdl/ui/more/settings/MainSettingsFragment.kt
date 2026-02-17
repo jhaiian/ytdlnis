@@ -516,14 +516,9 @@ class MainSettingsFragment : BaseSettingsFragment() {
         val cloned: Preference = when (original) {
             is androidx.preference.SwitchPreferenceCompat -> {
                 androidx.preference.SwitchPreferenceCompat(requireContext()).also { sw ->
-                    // Read actual saved value from SharedPreferences, not from the temp-inflated pref
                     sw.isChecked = sharedPrefs.getBoolean(key, false)
                     sw.summaryOn = original.summaryOn
                     sw.summaryOff = original.summaryOff
-                    sw.setOnPreferenceChangeListener { _, newValue ->
-                        sharedPrefs.edit().putBoolean(key, newValue as Boolean).apply()
-                        true
-                    }
                 }
             }
             is androidx.preference.SwitchPreference -> {
@@ -531,10 +526,6 @@ class MainSettingsFragment : BaseSettingsFragment() {
                     sw.isChecked = sharedPrefs.getBoolean(key, false)
                     sw.summaryOn = original.summaryOn
                     sw.summaryOff = original.summaryOff
-                    sw.setOnPreferenceChangeListener { _, newValue ->
-                        sharedPrefs.edit().putBoolean(key, newValue as Boolean).apply()
-                        true
-                    }
                 }
             }
             is androidx.preference.CheckBoxPreference -> {
@@ -542,25 +533,18 @@ class MainSettingsFragment : BaseSettingsFragment() {
                     cb.isChecked = sharedPrefs.getBoolean(key, false)
                     cb.summaryOn = original.summaryOn
                     cb.summaryOff = original.summaryOff
-                    cb.setOnPreferenceChangeListener { _, newValue ->
-                        sharedPrefs.edit().putBoolean(key, newValue as Boolean).apply()
-                        true
-                    }
                 }
             }
             is androidx.preference.ListPreference -> {
                 androidx.preference.ListPreference(requireContext()).also { lp ->
                     lp.entries = original.entries
                     lp.entryValues = original.entryValues
-                    // Read actual saved value
                     val savedValue = sharedPrefs.getString(key, null)
                     lp.value = savedValue
-                    // Show the currently selected entry as summary
                     val idx = lp.entryValues?.indexOf(savedValue) ?: -1
-                    if (idx >= 0) lp.summary = lp.entries[idx]
-                    else lp.summary = original.summary
+                    if (idx >= 0) lp.summary = lp.entries[idx] else lp.summary = original.summary
+                    // Update summary after selection
                     lp.setOnPreferenceChangeListener { pref, newValue ->
-                        sharedPrefs.edit().putString(key, newValue as String).apply()
                         val newIdx = lp.entryValues?.indexOf(newValue) ?: -1
                         if (newIdx >= 0) pref.summary = lp.entries[newIdx]
                         true
@@ -572,11 +556,6 @@ class MainSettingsFragment : BaseSettingsFragment() {
                     ml.entries = original.entries
                     ml.entryValues = original.entryValues
                     ml.values = sharedPrefs.getStringSet(key, emptySet())
-                    ml.setOnPreferenceChangeListener { _, newValue ->
-                        @Suppress("UNCHECKED_CAST")
-                        sharedPrefs.edit().putStringSet(key, newValue as Set<String>).apply()
-                        true
-                    }
                 }
             }
             is androidx.preference.EditTextPreference -> {
@@ -587,9 +566,7 @@ class MainSettingsFragment : BaseSettingsFragment() {
                     et.dialogTitle = original.dialogTitle
                     et.dialogMessage = original.dialogMessage
                     et.setOnPreferenceChangeListener { pref, newValue ->
-                        val text = newValue as String
-                        sharedPrefs.edit().putString(key, text).apply()
-                        pref.summary = text.ifEmpty { original.summary }
+                        pref.summary = (newValue as String).ifEmpty { original.summary }
                         true
                     }
                 }
@@ -601,14 +578,10 @@ class MainSettingsFragment : BaseSettingsFragment() {
                     sb.seekBarIncrement = original.seekBarIncrement
                     sb.showSeekBarValue = original.showSeekBarValue
                     sb.value = sharedPrefs.getInt(key, original.min)
-                    sb.setOnPreferenceChangeListener { _, newValue ->
-                        sharedPrefs.edit().putInt(key, newValue as Int).apply()
-                        true
-                    }
                 }
             }
             else -> {
-                // Unknown/complex type: just navigate
+                // Unknown/complex type: navigate to the real page
                 Preference(requireContext()).also { p ->
                     p.setOnPreferenceClickListener {
                         navigateToPreferenceLocation(original.key, categoryKey)
@@ -625,11 +598,12 @@ class MainSettingsFragment : BaseSettingsFragment() {
         cloned.icon = original.icon
         cloned.isEnabled = original.isEnabled
         cloned.isSelectable = true
-        cloned.isPersistent = false
+        // isPersistent = true so the PreferenceManager persists values automatically
+        // (the pref is attached to the screen's PreferenceManager, so this works correctly)
+        cloned.isPersistent = true
 
-        // For every interactive type, show a snackbar with a "Go to" action on every click.
-        // Returning false means the preference still handles its own click too
-        // (switch toggles, list opens its dialog, edittext opens its dialog, etc.)
+        // Show a "Go →" snackbar on every click while still letting the preference
+        // do its own thing (toggle switch, open dialog, etc.) via returning false
         when (cloned) {
             is androidx.preference.SwitchPreferenceCompat,
             is androidx.preference.SwitchPreference,
@@ -640,10 +614,10 @@ class MainSettingsFragment : BaseSettingsFragment() {
             is androidx.preference.SeekBarPreference -> {
                 cloned.setOnPreferenceClickListener {
                     showNavigationPrompt(original, categoryKey)
-                    false // false = also let the preference handle the click (toggle/open dialog)
+                    false // let the preference also handle the click
                 }
             }
-            else -> { /* plain Preference already has its listener set above */ }
+            else -> { /* fallback Preference already navigates on click */ }
         }
 
         return cloned
