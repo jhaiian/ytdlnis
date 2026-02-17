@@ -656,11 +656,38 @@ class MainSettingsFragment : BaseSettingsFragment() {
             .setAction("Go →") {
                 navigateToPreferenceLocation(pref.key, categoryKey)
             }
+
         val snackbarView = snackbar.view
+
+        // Match app background color from theme
+        val bgAttr = intArrayOf(com.google.android.material.R.attr.colorSurface)
+        val bgTypedArray = requireContext().obtainStyledAttributes(bgAttr)
+        val bgColor = bgTypedArray.getColor(0, 0xFF1C1C1E.toInt())
+        bgTypedArray.recycle()
+
+        // Match accent color from theme
+        val accentAttr = intArrayOf(com.google.android.material.R.attr.colorPrimary)
+        val accentTypedArray = requireContext().obtainStyledAttributes(accentAttr)
+        val accentColor = accentTypedArray.getColor(0, 0xFF6750A4.toInt())
+        accentTypedArray.recycle()
+
+        // Match text color from theme
+        val textAttr = intArrayOf(com.google.android.material.R.attr.colorOnSurface)
+        val textTypedArray = requireContext().obtainStyledAttributes(textAttr)
+        val textColor = textTypedArray.getColor(0, 0xFFFFFFFF.toInt())
+        textTypedArray.recycle()
+
+        snackbarView.background = androidx.core.content.ContextCompat.getDrawable(
+            requireContext(), com.google.android.material.R.drawable.m3_snackbar_background
+        )
+        snackbarView.backgroundTintList = android.content.res.ColorStateList.valueOf(bgColor)
+
+        snackbar.setTextColor(textColor)
+        snackbar.setActionTextColor(accentColor)
+
         val params = snackbarView.layoutParams as? android.widget.FrameLayout.LayoutParams
         if (params != null) {
             params.gravity = android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL
-            // Push it below the status bar
             val statusBarHeight = requireContext().resources.getDimensionPixelSize(
                 requireContext().resources.getIdentifier("status_bar_height", "dimen", "android")
             ).coerceAtLeast(48)
