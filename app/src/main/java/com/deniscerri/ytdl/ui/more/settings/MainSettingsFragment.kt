@@ -660,7 +660,11 @@ class MainSettingsFragment : BaseSettingsFragment() {
         val params = snackbarView.layoutParams as? android.widget.FrameLayout.LayoutParams
         if (params != null) {
             params.gravity = android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL
-            params.topMargin = 0
+            // Push it below the status bar
+            val statusBarHeight = requireContext().resources.getDimensionPixelSize(
+                requireContext().resources.getIdentifier("status_bar_height", "dimen", "android")
+            ).coerceAtLeast(48)
+            params.topMargin = statusBarHeight + 8
             snackbarView.layoutParams = params
         }
         snackbar.show()
