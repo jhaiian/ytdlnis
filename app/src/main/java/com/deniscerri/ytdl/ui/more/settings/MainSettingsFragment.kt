@@ -640,12 +640,7 @@ class MainSettingsFragment : BaseSettingsFragment() {
             is androidx.preference.EditTextPreference,
             is androidx.preference.SeekBarPreference -> {
                 cloned.setOnPreferenceClickListener {
-                    val categoryName = getString(categoryTitles[categoryKey] ?: R.string.settings)
-                    Snackbar.make(requireView(), "${original.title} • $categoryName", Snackbar.LENGTH_LONG)
-                        .setAction(getString(android.R.string.ok).replace("OK", "Go →")) {
-                            navigateToPreferenceLocation(original.key, categoryKey)
-                        }
-                        .show()
+                    showNavigationPrompt(original, categoryKey)
                     false // false = also let the preference handle the click (toggle/open dialog)
                 }
             }
@@ -657,11 +652,18 @@ class MainSettingsFragment : BaseSettingsFragment() {
 
     private fun showNavigationPrompt(pref: Preference, categoryKey: String) {
         val categoryName = getString(categoryTitles[categoryKey] ?: R.string.settings)
-        Snackbar.make(requireView(), "${pref.title} • $categoryName", Snackbar.LENGTH_LONG)
+        val snackbar = Snackbar.make(requireView(), "${pref.title} • $categoryName", Snackbar.LENGTH_LONG)
             .setAction("Go →") {
                 navigateToPreferenceLocation(pref.key, categoryKey)
             }
-            .show()
+        val snackbarView = snackbar.view
+        val params = snackbarView.layoutParams as? android.widget.FrameLayout.LayoutParams
+        if (params != null) {
+            params.gravity = android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL
+            params.topMargin = 16
+            snackbarView.layoutParams = params
+        }
+        snackbar.show()
     }
     
     private fun navigateToPreferenceLocation(prefKey: String?, categoryKey: String) {
