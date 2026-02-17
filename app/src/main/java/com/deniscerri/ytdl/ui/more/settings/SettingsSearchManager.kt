@@ -470,6 +470,11 @@ class SettingsSearchManager(
         return if (prevRow[shortLen] <= threshold) prevRow[shortLen] else -1
     }
     
+    fun cancelPendingSearch() {
+        searchJob?.cancel()
+        searchJob = null
+    }
+
     fun clearCache() {
         searchJob?.cancel()
         searchJob = null
