@@ -634,6 +634,16 @@ class MainSettingsFragment : BaseSettingsFragment() {
         cloned.isSelectable = true
         cloned.isPersistent = false // We manage persistence manually via the change listener
 
+        // Show navigation snackbar on every click for ALL types.
+        // Returning false lets the preference's own default behavior still run
+        // (toggle the switch, open the list dialog, open the edit dialog, etc.)
+        if (cloned !is Preference || original !is Preference) {
+            cloned.setOnPreferenceClickListener {
+                showNavigationPrompt(original, categoryKey)
+                false // false = don't consume the click, let the widget handle it too
+            }
+        }
+
         return cloned
     }
 
