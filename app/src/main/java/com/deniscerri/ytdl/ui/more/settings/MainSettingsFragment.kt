@@ -511,31 +511,136 @@ class MainSettingsFragment : BaseSettingsFragment() {
     }
 
     private fun clonePreference(original: Preference, categoryKey: String): Preference {
-        val cloned = try {
-            original.javaClass.getConstructor(
-                android.content.Context::class.java
-            ).newInstance(requireContext())
-        } catch (e: Exception) {
-            Preference(requireContext())
+        val sharedPreferences = PreferenceManager.getDefaultSharedPreferences(requireContext())
+        
+        // Create actual functional preference based on type
+        val cloned = when (original) {
+            is androidx.preference.SwitchPreferenceCompat -> {
+                androidx.preference.SwitchPreferenceCompat(requireContext()).apply {
+                    // Copy switch-specific properties
+                    isChecked = original.isChecked
+                    summaryOn = original.summaryOn
+                    summaryOff = original.summaryOff
+                    disableDependentsState = original.disableDependentsState
+                    
+                    // Make it functional
+                    setOnPreferenceChangeListener { _, newValue ->
+                        // Update SharedPreferences immediately
+                        sharedPreferences.edit().putBoolean(original.key, newValue as Boolean).apply()
+                        true
+                    }
+                }
+            }
+            is androidx.preference.ListPreference -> {
+                androidx.preference.ListPreference(requireContext()).apply {
+                    // Copy list-specific properties
+                    entries = original.entries
+                    entryValues = original.entryValues
+                    value = original.value
+                    
+                    // Make it functional - will show dialog on click
+                    setOnPreferenceChangeListener { _, newValue ->
+                        // Update SharedPreferences immediately
+                        sharedPreferences.edit().putString(original.key, newValue as String).apply()
+                        
+                        // Update the summary to show selected value
+                        val index = entryValues.indexOf(newValue)
+                        if (index >= 0 && index < entries.size) {
+                            summary = entries[index]
+                        }
+                        true
+                    }
+                }
+            }
+            is androidx.preference.MultiSelectListPreference -> {
+                androidx.preference.MultiSelectListPreference(requireContext()).apply {
+                    // Copy multi-select specific properties
+                    entries = original.entries
+                    entryValues = original.entryValues
+                    values = original.values
+                    
+                    // Make it functional
+                    setOnPreferenceChangeListener { _, newValue ->
+                        @Suppress("UNCHECKED_CAST")
+                        val selectedValues = newValue as Set<String>
+                        sharedPreferences.edit().putStringSet(original.key, selectedValues).apply()
+                        true
+                    }
+                }
+            }
+            is androidx.preference.EditTextPreference -> {
+                androidx.preference.EditTextPreference(requireContext()).apply {
+                    // Copy edit text specific properties
+                    text = original.text
+                    dialogTitle = original.dialogTitle
+                    dialogMessage = original.dialogMessage
+                    
+                    // Make it functional
+                    setOnPreferenceChangeListener { _, newValue ->
+                        sharedPreferences.edit().putString(original.key, newValue as String).apply()
+                        
+                        // Update summary to show current value
+                        summary = newValue.toString()
+                        true
+                    }
+                }
+            }
+            is androidx.preference.SeekBarPreference -> {
+                androidx.preference.SeekBarPreference(requireContext()).apply {
+                    // Copy seekbar specific properties  
+                    min = original.min
+                    max = original.max
+                    value = original.value
+                    showSeekBarValue = original.showSeekBarValue
+                    seekBarIncrement = original.seekBarIncrement
+                    
+                    // Make it functional
+                    setOnPreferenceChangeListener { _, newValue ->
+                        sharedPreferences.edit().putInt(original.key, newValue as Int).apply()
+                        true
+                    }
+                }
+            }
+            is androidx.preference.CheckBoxPreference -> {
+                androidx.preference.CheckBoxPreference(requireContext()).apply {
+                    // Copy checkbox specific properties
+                    isChecked = original.isChecked
+                    summaryOn = original.summaryOn
+                    summaryOff = original.summaryOff
+                    
+                    // Make it functional
+                    setOnPreferenceChangeListener { _, newValue ->
+                        sharedPreferences.edit().putBoolean(original.key, newValue as Boolean).apply()
+                        true
+                    }
+                }
+            }
+            else -> {
+                // For other preference types, create basic preference with navigation
+                Preference(requireContext()).apply {
+                    setOnPreferenceClickListener {
+                        try {
+                            showNavigationPrompt(original, categoryKey)
+                        } catch (e: Exception) {
+                            Log.e("MainSettings", "Error navigating to preference", e)
+                            Toast.makeText(requireContext(), "Cannot navigate to this setting", Toast.LENGTH_SHORT).show()
+                        }
+                        true
+                    }
+                }
+            }
         }
 
+        // Copy common properties to all cloned preferences
         cloned.apply {
+            key = original.key
             title = original.title
             summary = original.summary
-            key = original.key
             icon = original.icon
-            isEnabled = true
+            isEnabled = original.isEnabled
             isSelectable = true
-            
-            setOnPreferenceClickListener {
-                try {
-                    showNavigationPrompt(original, categoryKey)
-                } catch (e: Exception) {
-                    Log.e("MainSettings", "Error navigating to preference", e)
-                    Toast.makeText(requireContext(), "Cannot navigate to this setting", Toast.LENGTH_SHORT).show()
-                }
-                true
-            }
+            isPersistent = true // Important: make sure changes persist
+            dependency = original.dependency
         }
 
         return cloned
