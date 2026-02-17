@@ -511,114 +511,107 @@ class MainSettingsFragment : BaseSettingsFragment() {
     }
 
     private fun clonePreference(original: Preference, categoryKey: String): Preference {
-        val sharedPreferences = PreferenceManager.getDefaultSharedPreferences(requireContext())
-        
-        // Create actual functional preference based on type
-        val cloned = when (original) {
+        val sharedPrefs = PreferenceManager.getDefaultSharedPreferences(requireContext())
+        val key = original.key ?: ""
+
+        val cloned: Preference = when (original) {
             is androidx.preference.SwitchPreferenceCompat -> {
-                androidx.preference.SwitchPreferenceCompat(requireContext()).apply {
-                    // Copy switch-specific properties
-                    isChecked = original.isChecked
-                    summaryOn = original.summaryOn
-                    summaryOff = original.summaryOff
-                    disableDependentsState = original.disableDependentsState
-                    
-                    // Make it functional
-                    setOnPreferenceChangeListener { _, newValue ->
-                        // Update SharedPreferences immediately
-                        sharedPreferences.edit().putBoolean(original.key, newValue as Boolean).apply()
+                androidx.preference.SwitchPreferenceCompat(requireContext()).also { sw ->
+                    // Read actual saved value from SharedPreferences, not from the temp-inflated pref
+                    sw.isChecked = sharedPrefs.getBoolean(key, false)
+                    sw.summaryOn = original.summaryOn
+                    sw.summaryOff = original.summaryOff
+                    sw.setOnPreferenceChangeListener { _, newValue ->
+                        sharedPrefs.edit().putBoolean(key, newValue as Boolean).apply()
                         true
                     }
                 }
             }
-            is androidx.preference.ListPreference -> {
-                androidx.preference.ListPreference(requireContext()).apply {
-                    // Copy list-specific properties
-                    entries = original.entries
-                    entryValues = original.entryValues
-                    value = original.value
-                    
-                    // Make it functional - will show dialog on click
-                    setOnPreferenceChangeListener { _, newValue ->
-                        // Update SharedPreferences immediately
-                        sharedPreferences.edit().putString(original.key, newValue as String).apply()
-                        
-                        // Update the summary to show selected value
-                        val index = entryValues.indexOf(newValue)
-                        if (index >= 0 && index < entries.size) {
-                            summary = entries[index]
-                        }
-                        true
-                    }
-                }
-            }
-            is androidx.preference.MultiSelectListPreference -> {
-                androidx.preference.MultiSelectListPreference(requireContext()).apply {
-                    // Copy multi-select specific properties
-                    entries = original.entries
-                    entryValues = original.entryValues
-                    values = original.values
-                    
-                    // Make it functional
-                    setOnPreferenceChangeListener { _, newValue ->
-                        @Suppress("UNCHECKED_CAST")
-                        val selectedValues = newValue as Set<String>
-                        sharedPreferences.edit().putStringSet(original.key, selectedValues).apply()
-                        true
-                    }
-                }
-            }
-            is androidx.preference.EditTextPreference -> {
-                androidx.preference.EditTextPreference(requireContext()).apply {
-                    // Copy edit text specific properties
-                    text = original.text
-                    dialogTitle = original.dialogTitle
-                    dialogMessage = original.dialogMessage
-                    
-                    // Make it functional
-                    setOnPreferenceChangeListener { _, newValue ->
-                        sharedPreferences.edit().putString(original.key, newValue as String).apply()
-                        
-                        // Update summary to show current value
-                        summary = newValue.toString()
-                        true
-                    }
-                }
-            }
-            is androidx.preference.SeekBarPreference -> {
-                androidx.preference.SeekBarPreference(requireContext()).apply {
-                    // Copy seekbar specific properties  
-                    min = original.min
-                    max = original.max
-                    value = original.value
-                    showSeekBarValue = original.showSeekBarValue
-                    seekBarIncrement = original.seekBarIncrement
-                    
-                    // Make it functional
-                    setOnPreferenceChangeListener { _, newValue ->
-                        sharedPreferences.edit().putInt(original.key, newValue as Int).apply()
+            is androidx.preference.SwitchPreference -> {
+                androidx.preference.SwitchPreference(requireContext()).also { sw ->
+                    sw.isChecked = sharedPrefs.getBoolean(key, false)
+                    sw.summaryOn = original.summaryOn
+                    sw.summaryOff = original.summaryOff
+                    sw.setOnPreferenceChangeListener { _, newValue ->
+                        sharedPrefs.edit().putBoolean(key, newValue as Boolean).apply()
                         true
                     }
                 }
             }
             is androidx.preference.CheckBoxPreference -> {
-                androidx.preference.CheckBoxPreference(requireContext()).apply {
-                    // Copy checkbox specific properties
-                    isChecked = original.isChecked
-                    summaryOn = original.summaryOn
-                    summaryOff = original.summaryOff
-                    
-                    // Make it functional
-                    setOnPreferenceChangeListener { _, newValue ->
-                        sharedPreferences.edit().putBoolean(original.key, newValue as Boolean).apply()
+                androidx.preference.CheckBoxPreference(requireContext()).also { cb ->
+                    cb.isChecked = sharedPrefs.getBoolean(key, false)
+                    cb.summaryOn = original.summaryOn
+                    cb.summaryOff = original.summaryOff
+                    cb.setOnPreferenceChangeListener { _, newValue ->
+                        sharedPrefs.edit().putBoolean(key, newValue as Boolean).apply()
+                        true
+                    }
+                }
+            }
+            is androidx.preference.ListPreference -> {
+                androidx.preference.ListPreference(requireContext()).also { lp ->
+                    lp.entries = original.entries
+                    lp.entryValues = original.entryValues
+                    // Read actual saved value
+                    val savedValue = sharedPrefs.getString(key, null)
+                    lp.value = savedValue
+                    // Show the currently selected entry as summary
+                    val idx = lp.entryValues?.indexOf(savedValue) ?: -1
+                    if (idx >= 0) lp.summary = lp.entries[idx]
+                    else lp.summary = original.summary
+                    lp.setOnPreferenceChangeListener { pref, newValue ->
+                        sharedPrefs.edit().putString(key, newValue as String).apply()
+                        val newIdx = lp.entryValues?.indexOf(newValue) ?: -1
+                        if (newIdx >= 0) pref.summary = lp.entries[newIdx]
+                        true
+                    }
+                }
+            }
+            is androidx.preference.MultiSelectListPreference -> {
+                androidx.preference.MultiSelectListPreference(requireContext()).also { ml ->
+                    ml.entries = original.entries
+                    ml.entryValues = original.entryValues
+                    ml.values = sharedPrefs.getStringSet(key, emptySet())
+                    ml.setOnPreferenceChangeListener { _, newValue ->
+                        @Suppress("UNCHECKED_CAST")
+                        sharedPrefs.edit().putStringSet(key, newValue as Set<String>).apply()
+                        true
+                    }
+                }
+            }
+            is androidx.preference.EditTextPreference -> {
+                androidx.preference.EditTextPreference(requireContext()).also { et ->
+                    val savedText = sharedPrefs.getString(key, "")
+                    et.text = savedText
+                    et.summary = if (savedText.isNullOrEmpty()) original.summary else savedText
+                    et.dialogTitle = original.dialogTitle
+                    et.dialogMessage = original.dialogMessage
+                    et.setOnPreferenceChangeListener { pref, newValue ->
+                        val text = newValue as String
+                        sharedPrefs.edit().putString(key, text).apply()
+                        pref.summary = text.ifEmpty { original.summary }
+                        true
+                    }
+                }
+            }
+            is androidx.preference.SeekBarPreference -> {
+                androidx.preference.SeekBarPreference(requireContext()).also { sb ->
+                    sb.min = original.min
+                    sb.max = original.max
+                    sb.seekBarIncrement = original.seekBarIncrement
+                    sb.showSeekBarValue = original.showSeekBarValue
+                    sb.value = sharedPrefs.getInt(key, original.min)
+                    sb.setOnPreferenceChangeListener { _, newValue ->
+                        sharedPrefs.edit().putInt(key, newValue as Int).apply()
                         true
                     }
                 }
             }
             else -> {
-                // For other preference types, create basic preference with navigation
-                Preference(requireContext()).apply {
-                    setOnPreferenceClickListener {
+                // Anything else (file pickers, custom prefs, etc.) navigates to its page
+                Preference(requireContext()).also { p ->
+                    p.setOnPreferenceClickListener {
                         try {
                             showNavigationPrompt(original, categoryKey)
                         } catch (e: Exception) {
@@ -631,17 +624,15 @@ class MainSettingsFragment : BaseSettingsFragment() {
             }
         }
 
-        // Copy common properties to all cloned preferences
-        cloned.apply {
-            key = original.key
-            title = original.title
-            summary = original.summary
-            icon = original.icon
-            isEnabled = original.isEnabled
-            isSelectable = true
-            isPersistent = true // Important: make sure changes persist
-            dependency = original.dependency
-        }
+        // Copy shared visual properties
+        cloned.key = key
+        cloned.title = original.title
+        // Only set summary if we haven't already set a dynamic one above
+        if (cloned.summary.isNullOrEmpty()) cloned.summary = original.summary
+        cloned.icon = original.icon
+        cloned.isEnabled = original.isEnabled
+        cloned.isSelectable = true
+        cloned.isPersistent = false // We manage persistence manually via the change listener
 
         return cloned
     }
