@@ -652,7 +652,7 @@ class MainSettingsFragment : BaseSettingsFragment() {
 
     private fun showNavigationPrompt(pref: Preference, categoryKey: String) {
         val categoryName = getString(categoryTitles[categoryKey] ?: R.string.settings)
-        val snackbar = Snackbar.make(requireView(), "${pref.title} • $categoryName", Snackbar.LENGTH_LONG)
+        val snackbar = Snackbar.make(requireActivity().window.decorView, "${pref.title} • $categoryName", Snackbar.LENGTH_LONG)
             .setAction("Go →") {
                 navigateToPreferenceLocation(pref.key, categoryKey)
             }
@@ -660,7 +660,7 @@ class MainSettingsFragment : BaseSettingsFragment() {
         val params = snackbarView.layoutParams as? android.widget.FrameLayout.LayoutParams
         if (params != null) {
             params.gravity = android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL
-            params.topMargin = 16
+            params.topMargin = 0
             snackbarView.layoutParams = params
         }
         snackbar.show()
