@@ -609,15 +609,10 @@ class MainSettingsFragment : BaseSettingsFragment() {
                 }
             }
             else -> {
-                // Anything else (file pickers, custom prefs, etc.) navigates to its page
+                // Unknown/complex type: just navigate
                 Preference(requireContext()).also { p ->
                     p.setOnPreferenceClickListener {
-                        try {
-                            showNavigationPrompt(original, categoryKey)
-                        } catch (e: Exception) {
-                            Log.e("MainSettings", "Error navigating to preference", e)
-                            Toast.makeText(requireContext(), "Cannot navigate to this setting", Toast.LENGTH_SHORT).show()
-                        }
+                        navigateToPreferenceLocation(original.key, categoryKey)
                         true
                     }
                 }
@@ -627,21 +622,34 @@ class MainSettingsFragment : BaseSettingsFragment() {
         // Copy shared visual properties
         cloned.key = key
         cloned.title = original.title
-        // Only set summary if we haven't already set a dynamic one above
         if (cloned.summary.isNullOrEmpty()) cloned.summary = original.summary
         cloned.icon = original.icon
         cloned.isEnabled = original.isEnabled
         cloned.isSelectable = true
-        cloned.isPersistent = false // We manage persistence manually via the change listener
+        cloned.isPersistent = false
 
-        // Show navigation snackbar on every click for ALL types.
-        // Returning false lets the preference's own default behavior still run
-        // (toggle the switch, open the list dialog, open the edit dialog, etc.)
-        if (cloned !is Preference || original !is Preference) {
-            cloned.setOnPreferenceClickListener {
-                showNavigationPrompt(original, categoryKey)
-                false // false = don't consume the click, let the widget handle it too
+        // For every interactive type, show a snackbar with a "Go to" action on every click.
+        // Returning false means the preference still handles its own click too
+        // (switch toggles, list opens its dialog, edittext opens its dialog, etc.)
+        when (cloned) {
+            is androidx.preference.SwitchPreferenceCompat,
+            is androidx.preference.SwitchPreference,
+            is androidx.preference.CheckBoxPreference,
+            is androidx.preference.ListPreference,
+            is androidx.preference.MultiSelectListPreference,
+            is androidx.preference.EditTextPreference,
+            is androidx.preference.SeekBarPreference -> {
+                cloned.setOnPreferenceClickListener {
+                    val categoryName = getString(categoryTitles[categoryKey] ?: R.string.settings)
+                    Snackbar.make(requireView(), "${original.title} • $categoryName", Snackbar.LENGTH_LONG)
+                        .setAction(getString(android.R.string.ok).replace("OK", "Go →")) {
+                            navigateToPreferenceLocation(original.key, categoryKey)
+                        }
+                        .show()
+                    false // false = also let the preference handle the click (toggle/open dialog)
+                }
             }
+            else -> { /* plain Preference already has its listener set above */ }
         }
 
         return cloned
@@ -649,45 +657,13 @@ class MainSettingsFragment : BaseSettingsFragment() {
 
     private fun showNavigationPrompt(pref: Preference, categoryKey: String) {
         val categoryName = getString(categoryTitles[categoryKey] ?: R.string.settings)
-        val prefTitle = pref.title?.toString() ?: "setting"
-        
-        try {
-            val snackbar = Snackbar.make(
-                requireView(),
-                "$prefTitle is in: $categoryName",
-                Snackbar.LENGTH_LONG
-            )
-            
-            snackbar.setAction("Go") {
+        Snackbar.make(requireView(), "${pref.title} • $categoryName", Snackbar.LENGTH_LONG)
+            .setAction("Go →") {
                 navigateToPreferenceLocation(pref.key, categoryKey)
             }
-            
-            val view = snackbar.view
-            
-            val params = view.layoutParams as? androidx.coordinatorlayout.widget.CoordinatorLayout.LayoutParams
-            if (params != null) {
-                params.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-                params.topMargin = 100
-                view.layoutParams = params
-            }
-            
-            snackbar.show()
-        } catch (e: Exception) {
-            showNavigationDialog(pref, categoryKey, categoryName, prefTitle)
-        }
-    }
-    
-    private fun showNavigationDialog(pref: Preference, categoryKey: String, categoryName: String, prefTitle: String) {
-        MaterialAlertDialogBuilder(requireContext())
-            .setTitle("Go to setting")
-            .setMessage("$prefTitle is located in: $categoryName\n\nWould you like to go there?")
-            .setPositiveButton("Go") { _, _ ->
-                navigateToPreferenceLocation(pref.key, categoryKey)
-            }
-            .setNegativeButton("Cancel", null)
             .show()
     }
-
+    
     private fun navigateToPreferenceLocation(prefKey: String?, categoryKey: String) {
         try {
             (activity as? SettingsActivity)?.clearSearchFocus()
