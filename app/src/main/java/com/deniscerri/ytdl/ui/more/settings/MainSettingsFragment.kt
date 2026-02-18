@@ -602,19 +602,31 @@ class MainSettingsFragment : BaseSettingsFragment() {
         // (the pref is attached to the screen's PreferenceManager, so this works correctly)
         cloned.isPersistent = true
 
-        // Show a "Go →" snackbar on every click while still letting the preference
-        // do its own thing (toggle switch, open dialog, etc.) via returning false
+        // Show a "Go →" snackbar on click for preferences that don't open dialogs
+        // (ListPreference, EditTextPreference, MultiSelectListPreference open dialogs,
+        // so we skip them to let the dialog open normally)
         when (cloned) {
             is androidx.preference.SwitchPreferenceCompat,
             is androidx.preference.SwitchPreference,
             is androidx.preference.CheckBoxPreference,
-            is androidx.preference.ListPreference,
-            is androidx.preference.MultiSelectListPreference,
-            is androidx.preference.EditTextPreference,
             is androidx.preference.SeekBarPreference -> {
                 cloned.setOnPreferenceClickListener {
                     showNavigationPrompt(original, categoryKey)
-                    false // let the preference also handle the click
+                    false // let the preference also handle the click (toggle, etc.)
+                }
+            }
+            is androidx.preference.ListPreference,
+            is androidx.preference.EditTextPreference,
+            is androidx.preference.MultiSelectListPreference -> {
+                // Don't override click - let these open their dialogs naturally.
+                // Show snackbar AFTER they change instead.
+                val existingListener = cloned.onPreferenceChangeListener
+                cloned.setOnPreferenceChangeListener { pref, newValue ->
+                    val result = existingListener?.onPreferenceChange(pref, newValue) ?: true
+                    if (result) {
+                        showNavigationPrompt(original, categoryKey)
+                    }
+                    result
                 }
             }
             else -> { /* fallback Preference already navigates on click */ }
