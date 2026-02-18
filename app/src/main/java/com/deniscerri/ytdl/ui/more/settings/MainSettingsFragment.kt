@@ -553,7 +553,7 @@ class MainSettingsFragment : BaseSettingsFragment() {
                             "ytdlnis_icon" -> {
                                 // App icon shows confirmation dialog
                                 MaterialAlertDialogBuilder(requireContext())
-                                    .setMessage(getString(R.string.app_icon_change))
+                                    .setTitle(getString(R.string.app_icon_change))
                                     .setPositiveButton(getString(R.string.ok)) { _, _ ->
                                         sharedPrefs.edit().putString(key, newValue as String).apply()
                                         ThemeUtil.recreateAllActivities()
@@ -565,7 +565,7 @@ class MainSettingsFragment : BaseSettingsFragment() {
                             "ytdlnis_theme", "theme_accent" -> {
                                 // Theme and accent show confirmation dialog
                                 MaterialAlertDialogBuilder(requireContext())
-                                    .setMessage(getString(R.string.app_icon_change))
+                                    .setTitle(getString(R.string.app_icon_change))
                                     .setPositiveButton(getString(R.string.ok)) { _, _ ->
                                         sharedPrefs.edit().putString(key, newValue as String).apply()
                                         ThemeUtil.updateThemes()
@@ -577,7 +577,7 @@ class MainSettingsFragment : BaseSettingsFragment() {
                             "app_language" -> {
                                 // Language shows confirmation dialog
                                 MaterialAlertDialogBuilder(requireContext())
-                                    .setMessage(getString(R.string.app_icon_change))
+                                    .setTitle(getString(R.string.app_icon_change))
                                     .setPositiveButton(getString(R.string.ok)) { _, _ ->
                                         sharedPrefs.edit().putString(key, newValue as String).apply()
                                         if (newValue == "system") {
