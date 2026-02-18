@@ -107,6 +107,28 @@ class MainSettingsFragment : BaseSettingsFragment() {
         "advanced" to R.id.action_mainSettingsFragment_to_advancedSettingsFragment
     )
 
+    // Folder path keys that need live picker support in search results
+    private val folderPathKeys = setOf("music_path", "video_path", "command_path", "cache_path")
+
+    // Track which folder key is currently being picked so the result knows where to save
+    private var pendingFolderPickKey: String? = null
+
+    private val folderPickerLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val key = pendingFolderPickKey ?: return@registerForActivityResult
+        pendingFolderPickKey = null
+        if (result.resultCode == Activity.RESULT_OK) {
+            val uri = result.data?.data ?: return@registerForActivityResult
+            requireActivity().contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+            PreferenceManager.getDefaultSharedPreferences(requireContext())
+                .edit().putString(key, uri.toString()).apply()
+        }
+    }
+
     private data class HierarchicalPreference(
         val preference: Preference,
         val parent: PreferenceGroup?,
@@ -632,11 +654,48 @@ class MainSettingsFragment : BaseSettingsFragment() {
                 }
             }
             else -> {
-                // Unknown/complex type: navigate to the real page
                 Preference(requireContext()).also { p ->
-                    p.setOnPreferenceClickListener {
-                        navigateToPreferenceLocation(original.key, categoryKey)
-                        true
+                    if (key in folderPathKeys) {
+                        // Set current path as summary from SharedPrefs
+                        val savedPath = sharedPrefs.getString(key, "")!!
+                        if (savedPath.isNotEmpty()) {
+                            p.summary = FileUtil.formatPath(savedPath)
+                        }
+                        // Launch folder picker directly, same as FolderSettingsFragment
+                        p.setOnPreferenceClickListener {
+                            if (key == "cache_path") {
+                                UiUtil.showGenericConfirmDialog(
+                                    requireContext(),
+                                    getString(R.string.cache_directory),
+                                    getString(R.string.cache_directory_warning)
+                                ) {
+                                    pendingFolderPickKey = key
+                                    folderPickerLauncher.launch(
+                                        Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                                            addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                            addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+                                        }
+                                    )
+                                }
+                            } else {
+                                pendingFolderPickKey = key
+                                folderPickerLauncher.launch(
+                                    Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                                        addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                        addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+                                    }
+                                )
+                            }
+                            true
+                        }
+                    } else {
+                        // Unknown/complex type: navigate to the real page
+                        p.setOnPreferenceClickListener {
+                            navigateToPreferenceLocation(original.key, categoryKey)
+                            true
+                        }
                     }
                 }
             }
@@ -658,10 +717,14 @@ class MainSettingsFragment : BaseSettingsFragment() {
         // (the pref is attached to the screen's PreferenceManager, so this works correctly)
         cloned.isPersistent = true
 
-        // Show a "Go →" snackbar immediately on click for all preference types
-        cloned.setOnPreferenceClickListener {
-            showNavigationPrompt(original, categoryKey)
-            false // let the preference also handle the click (open dialog, toggle, etc.)
+        // Show a "Go →" snackbar immediately on click for all preference types.
+        // Folder path preferences handle their own click (launch picker), so skip them here
+        // to avoid overwriting the picker launcher click handler.
+        if (key !in folderPathKeys) {
+            cloned.setOnPreferenceClickListener {
+                showNavigationPrompt(original, categoryKey)
+                false // let the preference also handle the click (open dialog, toggle, etc.)
+            }
         }
 
         return cloned
