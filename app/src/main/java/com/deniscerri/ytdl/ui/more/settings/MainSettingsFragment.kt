@@ -2,15 +2,21 @@ package com.deniscerri.ytdl.ui.more.settings
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.content.Context
 import android.content.DialogInterface
 import android.content.Intent
 import android.content.SharedPreferences
+import android.graphics.Typeface
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
 import android.util.LayoutDirection
 import android.util.Log
 import android.view.Gravity
 import android.view.View
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -25,6 +31,11 @@ import androidx.preference.Preference
 import androidx.preference.PreferenceCategory
 import androidx.preference.PreferenceGroup
 import androidx.preference.PreferenceManager
+import androidx.recyclerview.widget.ItemTouchHelper
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import com.deniscerri.ytdl.BuildConfig
@@ -39,10 +50,13 @@ import com.deniscerri.ytdl.database.models.observeSources.ObserveSourcesItem
 import com.deniscerri.ytdl.database.models.SearchHistoryItem
 import com.deniscerri.ytdl.database.models.TemplateShortcut
 import com.deniscerri.ytdl.database.viewmodel.SettingsViewModel
+import com.deniscerri.ytdl.database.viewmodel.DownloadViewModel
+import com.deniscerri.ytdl.ui.adapter.SortableTextItemAdapter
 import com.deniscerri.ytdl.util.FileUtil
 import com.deniscerri.ytdl.util.ThemeUtil
 import com.deniscerri.ytdl.util.UiUtil
 import com.deniscerri.ytdl.util.UpdateUtil
+import com.deniscerri.ytdl.work.MoveCacheFilesWorker
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
 import com.google.gson.Gson
@@ -75,6 +89,7 @@ class MainSettingsFragment : BaseSettingsFragment() {
     private lateinit var settingsViewModel: SettingsViewModel
     private lateinit var editor: SharedPreferences.Editor
     private lateinit var searchManager: SettingsSearchManager
+    private var downloadViewModel: DownloadViewModel? = null
 
     private val searchCategories = mutableMapOf<String, PreferenceCategory>()
     private var isSearchMode = false
@@ -109,6 +124,34 @@ class MainSettingsFragment : BaseSettingsFragment() {
 
     // Folder path keys that need live picker support in search results
     private val folderPathKeys = setOf("music_path", "video_path", "command_path", "cache_path")
+
+    // Keys that should never appear in search (hidden/internal prefs)
+    private val searchExcludedKeys = setOf(
+        "start_destination",                // hidden duplicate of navigation_bar
+        "last_used_download_type",          // internal hidden key
+        "update_ytdlp_while_downloading",   // hidden
+        "skip_updates",                     // hidden internal
+        "useragent_header"                  // hidden internal
+    )
+
+    // Keys that have direct action handlers; skip the generic navigation snackbar for these
+    private val directActionKeys = setOf(
+        "ignore_battery",
+        "reset_preferences",
+        "move_cache",
+        "clear_cache",
+        "file_name_template",
+        "file_name_template_audio",
+        "audio_bitrate",
+        "subs_lang",
+        "update_ytdl",
+        "ytdlp_source_label",
+        "changelog",
+        "yt_player_client",
+        "generate_po_tokens",
+        "format_importance_video",
+        "format_importance_audio"
+    )
 
     // Track which folder key is currently being picked so the result knows where to save
     private var pendingFolderPickKey: String? = null
@@ -203,6 +246,7 @@ class MainSettingsFragment : BaseSettingsFragment() {
         }
 
         updateUtil = UpdateUtil(requireContext())
+        downloadViewModel = ViewModelProvider(requireActivity())[DownloadViewModel::class.java]
 
         WorkManager.getInstance(requireContext()).getWorkInfosByTagLiveData("download").observe(this){
             activeDownloadCount = 0
@@ -466,11 +510,15 @@ class MainSettingsFragment : BaseSettingsFragment() {
         for (i in 0 until group.preferenceCount) {
             val pref = group.getPreference(i)
 
-            if (!pref.isVisible) continue
+            // Skip internally-hidden / duplicate preferences that should never surface in search.
+            // We do NOT use pref.isVisible here because some valid prefs (e.g. display_over_apps)
+            // are set invisible in XML but should still be searchable.
+            val prefKey = pref.key ?: ""
+            if (prefKey in searchExcludedKeys) continue
 
             val title = pref.title?.toString() ?: ""
             val summary = pref.summary?.toString() ?: ""
-            val key = pref.key ?: ""
+            val key = prefKey
 
             val matches = title.lowercase().contains(query) ||
                     summary.lowercase().contains(query) ||
@@ -540,9 +588,30 @@ class MainSettingsFragment : BaseSettingsFragment() {
         val cloned: Preference = when (original) {
             is androidx.preference.SwitchPreferenceCompat -> {
                 androidx.preference.SwitchPreferenceCompat(requireContext()).also { sw ->
-                    sw.isChecked = sharedPrefs.getBoolean(key, false)
+                    // display_over_apps: real state comes from system, not SharedPreferences
+                    sw.isChecked = when (key) {
+                        "display_over_apps" -> Settings.canDrawOverlays(requireContext())
+                        else -> sharedPrefs.getBoolean(key, false)
+                    }
                     sw.summaryOn = original.summaryOn
                     sw.summaryOff = original.summaryOff
+                    if (key == "display_over_apps") {
+                        sw.setOnPreferenceChangeListener { _, _ ->
+                            runCatching {
+                                val i = Intent(
+                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                    Uri.parse("package:" + requireContext().packageName)
+                                )
+                                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                startActivity(i)
+                            }
+                            false // don't persist; real state is from system
+                        }
+                    }
+                    if (key == "label_visibility") {
+                        // Hide on devices that use side navigation
+                        sw.isVisible = !resources.getBoolean(R.bool.uses_side_nav)
+                    }
                 }
             }
             is androidx.preference.SwitchPreference -> {
@@ -567,7 +636,12 @@ class MainSettingsFragment : BaseSettingsFragment() {
                     lp.value = savedValue
                     val idx = lp.entryValues?.indexOf(savedValue) ?: -1
                     if (idx >= 0) lp.summary = lp.entries[idx] else lp.summary = original.summary
-                    
+
+                    // label_visibility: hide on side-nav devices
+                    if (key == "label_visibility") {
+                        lp.isVisible = !resources.getBoolean(R.bool.uses_side_nav)
+                    }
+
                     lp.setOnPreferenceChangeListener { pref, newValue ->
                         val newIdx = lp.entryValues?.indexOf(newValue) ?: -1
                         if (newIdx >= 0) pref.summary = lp.entries[newIdx]
@@ -575,7 +649,6 @@ class MainSettingsFragment : BaseSettingsFragment() {
                         // Handle preferences that need app restart
                         when (key) {
                             "ytdlnis_icon" -> {
-                                // App icon shows confirmation dialog
                                 MaterialAlertDialogBuilder(requireContext())
                                     .setTitle(getString(R.string.app_icon_change))
                                     .setPositiveButton(getString(R.string.ok)) { _, _ ->
@@ -588,7 +661,6 @@ class MainSettingsFragment : BaseSettingsFragment() {
                                 return@setOnPreferenceChangeListener false
                             }
                             "ytdlnis_theme", "theme_accent" -> {
-                                // Theme and accent show confirmation dialog
                                 MaterialAlertDialogBuilder(requireContext())
                                     .setTitle(getString(R.string.app_icon_change))
                                     .setPositiveButton(getString(R.string.ok)) { _, _ ->
@@ -601,7 +673,6 @@ class MainSettingsFragment : BaseSettingsFragment() {
                                 return@setOnPreferenceChangeListener false
                             }
                             "app_language" -> {
-                                // Language shows confirmation dialog
                                 MaterialAlertDialogBuilder(requireContext())
                                     .setTitle(getString(R.string.app_icon_change))
                                     .setPositiveButton(getString(R.string.ok)) { _, _ ->
@@ -690,11 +761,344 @@ class MainSettingsFragment : BaseSettingsFragment() {
                             }
                             true
                         }
-                    } else {
-                        // Unknown/complex type: navigate to the real page
-                        p.setOnPreferenceClickListener {
-                            navigateToPreferenceLocation(original.key, categoryKey)
-                            true
+                    } else when (key) {
+                        // ── Battery optimization ──────────────────────────────────────────────
+                        "ignore_battery" -> {
+                            val pm = requireContext().getSystemService(Context.POWER_SERVICE) as PowerManager
+                            val alreadyIgnored = pm.isIgnoringBatteryOptimizations(requireContext().packageName)
+                            // If already ignored, make the pref invisible so it doesn't appear
+                            if (alreadyIgnored) {
+                                p.isVisible = false
+                            } else {
+                                p.setOnPreferenceClickListener {
+                                    val intent = Intent()
+                                    intent.action = Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+                                    intent.data = Uri.parse("package:" + requireContext().packageName)
+                                    startActivity(intent)
+                                    true
+                                }
+                            }
+                        }
+                        // ── Reset preferences ────────────────────────────────────────────────
+                        "reset_preferences" -> {
+                            val xmlRes = categoryFragmentMap[categoryKey]
+                            p.setOnPreferenceClickListener {
+                                UiUtil.showGenericConfirmDialog(
+                                    requireContext(),
+                                    getString(R.string.reset),
+                                    getString(R.string.reset_preferences_in_screen)
+                                ) {
+                                    if (xmlRes != null) {
+                                        val editor = sharedPrefs.edit()
+                                        val preferenceManager = PreferenceManager(requireContext())
+                                        val tempScreen = preferenceManager.inflateFromResource(
+                                            requireContext(), xmlRes, null
+                                        )
+                                        val prefsToReset = mutableListOf<Preference>()
+                                        fun collectAll(group: PreferenceGroup) {
+                                            for (i in 0 until group.preferenceCount) {
+                                                val pref2 = group.getPreference(i)
+                                                if (pref2 is PreferenceGroup) collectAll(pref2)
+                                                else if (!pref2.key.isNullOrEmpty()) editor.remove(pref2.key)
+                                            }
+                                        }
+                                        collectAll(tempScreen)
+                                        editor.apply()
+                                        PreferenceManager.setDefaultValues(requireActivity().applicationContext, xmlRes, true)
+                                    }
+                                }
+                                true
+                            }
+                        }
+                        // ── Move temporary files ──────────────────────────────────────────────
+                        "move_cache" -> {
+                            p.setOnPreferenceClickListener {
+                                val workRequest = OneTimeWorkRequestBuilder<MoveCacheFilesWorker>()
+                                    .addTag("cacheFiles")
+                                    .build()
+                                WorkManager.getInstance(requireContext()).beginUniqueWork(
+                                    System.currentTimeMillis().toString(),
+                                    ExistingWorkPolicy.KEEP,
+                                    workRequest
+                                ).enqueue()
+                                Snackbar.make(
+                                    requireActivity().window.decorView,
+                                    getString(R.string.move_temporary_files),
+                                    Snackbar.LENGTH_SHORT
+                                ).show()
+                                true
+                            }
+                        }
+                        // ── Clear temporary files ──────────────────────────────────────────────
+                        "clear_cache" -> {
+                            val cacheDir = java.io.File(FileUtil.getCachePath(requireContext()))
+                            var cacheSize = cacheDir.walkBottomUp().fold(0L) { acc, f -> acc + f.length() }
+                            val sizeStr = if (cacheSize < 10000) "0B" else FileUtil.convertFileSize(cacheSize)
+                            p.summary = "${getString(R.string.clear_temporary_files_summary)} ($sizeStr)"
+                            p.setOnPreferenceClickListener {
+                                lifecycleScope.launch {
+                                    val activeCount = withContext(Dispatchers.IO) {
+                                        downloadViewModel?.getActiveDownloadsCount() ?: 0
+                                    }
+                                    if (activeCount == 0) {
+                                        withContext(Dispatchers.IO) {
+                                            fun clearDir(folder: java.io.File) {
+                                                if (folder.exists() && folder.isDirectory) {
+                                                    folder.listFiles()?.forEach { file ->
+                                                        if (file.isDirectory) { clearDir(file); file.delete() }
+                                                        else file.delete()
+                                                    }
+                                                }
+                                            }
+                                            clearDir(cacheDir)
+                                        }
+                                        Snackbar.make(
+                                            requireActivity().window.decorView,
+                                            getString(R.string.cache_cleared),
+                                            Snackbar.LENGTH_SHORT
+                                        ).show()
+                                    } else {
+                                        Snackbar.make(
+                                            requireActivity().window.decorView,
+                                            getString(R.string.downloads_running_try_later),
+                                            Snackbar.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                }
+                                true
+                            }
+                        }
+                        // ── Filename templates ────────────────────────────────────────────────
+                        "file_name_template" -> {
+                            val currentVal = sharedPrefs.getString(key, "%(uploader).30B - %(title).170B") ?: ""
+                            p.summary = currentVal
+                            p.setOnPreferenceClickListener {
+                                UiUtil.showFilenameTemplateDialog(
+                                    requireActivity(),
+                                    sharedPrefs.getString("file_name_template", "%(uploader).30B - %(title).170B") ?: "",
+                                    "${getString(R.string.file_name_template)} [${getString(R.string.video)}]"
+                                ) { newVal ->
+                                    sharedPrefs.edit().putString("file_name_template", newVal).apply()
+                                    p.summary = newVal
+                                }
+                                true
+                            }
+                        }
+                        "file_name_template_audio" -> {
+                            val currentVal = sharedPrefs.getString(key, "%(uploader).30B - %(title).170B") ?: ""
+                            p.summary = currentVal
+                            p.setOnPreferenceClickListener {
+                                UiUtil.showFilenameTemplateDialog(
+                                    requireActivity(),
+                                    sharedPrefs.getString("file_name_template_audio", "%(uploader).30B - %(title).170B") ?: "",
+                                    "${getString(R.string.file_name_template)} [${getString(R.string.audio)}]"
+                                ) { newVal ->
+                                    sharedPrefs.edit().putString("file_name_template_audio", newVal).apply()
+                                    p.summary = newVal
+                                }
+                                true
+                            }
+                        }
+                        // ── Audio bitrate ──────────────────────────────────────────────────────
+                        "audio_bitrate" -> {
+                            val currentVal = sharedPrefs.getString("audio_bitrate", "") ?: ""
+                            val entries = requireContext().resources.getStringArray(R.array.audio_bitrate)
+                            val entryValues = requireContext().resources.getStringArray(R.array.audio_bitrate_values)
+                            p.summary = if (currentVal.isNotBlank() && entryValues.contains(currentVal)) {
+                                entries[entryValues.indexOf(currentVal)]
+                            } else {
+                                getString(R.string.defaultValue)
+                            }
+                            p.setOnPreferenceClickListener {
+                                val cur = sharedPrefs.getString("audio_bitrate", "") ?: ""
+                                UiUtil.showAudioBitrateDialog(requireActivity(), cur) { newVal ->
+                                    sharedPrefs.edit().putString("audio_bitrate", newVal).apply()
+                                    p.summary = if (newVal.isNotBlank() && entryValues.contains(newVal)) {
+                                        entries[entryValues.indexOf(newVal)]
+                                    } else {
+                                        getString(R.string.defaultValue)
+                                    }
+                                }
+                                true
+                            }
+                        }
+                        // ── Subtitle languages ────────────────────────────────────────────────
+                        "subs_lang" -> {
+                            p.summary = sharedPrefs.getString("subs_lang", "en.*,.*-orig") ?: "en.*,.*-orig"
+                            p.setOnPreferenceClickListener {
+                                UiUtil.showSubtitleLanguagesDialog(
+                                    requireActivity(),
+                                    listOf(),
+                                    sharedPrefs.getString("subs_lang", "en.*,.*-orig") ?: "en.*,.*-orig"
+                                ) { newVal ->
+                                    sharedPrefs.edit().putString("subs_lang", newVal).apply()
+                                    p.summary = newVal
+                                }
+                                true
+                            }
+                        }
+                        // ── Update yt-dlp ─────────────────────────────────────────────────────
+                        "update_ytdl" -> {
+                            p.setOnPreferenceClickListener {
+                                lifecycleScope.launch {
+                                    Snackbar.make(
+                                        requireActivity().window.decorView,
+                                        getString(R.string.ytdl_updating_started),
+                                        Snackbar.LENGTH_LONG
+                                    ).show()
+                                    runCatching {
+                                        val res = updateUtil!!.updateYoutubeDL(null)
+                                        when (res.status) {
+                                            UpdateUtil.YTDLPUpdateStatus.DONE ->
+                                                Snackbar.make(requireActivity().window.decorView, res.message, Snackbar.LENGTH_LONG).show()
+                                            UpdateUtil.YTDLPUpdateStatus.ALREADY_UP_TO_DATE ->
+                                                Snackbar.make(requireActivity().window.decorView, getString(R.string.you_are_in_latest_version), Snackbar.LENGTH_LONG).show()
+                                            else ->
+                                                Snackbar.make(requireActivity().window.decorView, res.message, Snackbar.LENGTH_LONG).show()
+                                        }
+                                    }.onFailure { e ->
+                                        Snackbar.make(
+                                            requireActivity().window.decorView,
+                                            e.message ?: getString(R.string.errored),
+                                            Snackbar.LENGTH_LONG
+                                        ).show()
+                                    }
+                                }
+                                true
+                            }
+                        }
+                        // ── yt-dlp source ─────────────────────────────────────────────────────
+                        "ytdlp_source_label" -> {
+                            p.summary = sharedPrefs.getString("ytdlp_source_label", "")!!
+                                .ifEmpty { getString(R.string.update_ytdl_stable) }
+                            p.setOnPreferenceClickListener {
+                                UiUtil.showYTDLSourceBottomSheet(requireActivity(), sharedPrefs) { label, source ->
+                                    sharedPrefs.edit()
+                                        .putString("ytdlp_source", source)
+                                        .putString("ytdlp_source_label", label)
+                                        .apply()
+                                    p.summary = label
+                                }
+                                true
+                            }
+                        }
+                        // ── Changelog (navigate to sub-fragment) ──────────────────────────────
+                        "changelog" -> {
+                            p.setOnPreferenceClickListener {
+                                (activity as? SettingsActivity)?.clearSearchFocus()
+                                hideKeyboard()
+                                restoreNormalView()
+                                findNavController().navigate(R.id.changeLogFragment)
+                                true
+                            }
+                        }
+                        // ── Player client (navigate to sub-fragment) ──────────────────────────
+                        "yt_player_client" -> {
+                            p.summary = original.summary
+                            p.setOnPreferenceClickListener {
+                                (activity as? SettingsActivity)?.clearSearchFocus()
+                                hideKeyboard()
+                                restoreNormalView()
+                                findNavController().navigate(R.id.youtubePlayerClientFragment)
+                                true
+                            }
+                        }
+                        // ── Generate PO tokens (navigate to sub-fragment) ─────────────────────
+                        "generate_po_tokens" -> {
+                            p.summary = original.summary
+                            p.setOnPreferenceClickListener {
+                                (activity as? SettingsActivity)?.clearSearchFocus()
+                                hideKeyboard()
+                                restoreNormalView()
+                                findNavController().navigate(R.id.generateYoutubePoTokensFragment)
+                                true
+                            }
+                        }
+                        // ── Format importance order ───────────────────────────────────────────
+                        "format_importance_audio", "format_importance_video" -> {
+                            val isAudio = key == "format_importance_audio"
+                            val arrayRes = if (isAudio) R.array.format_importance_audio else R.array.format_importance_video
+                            val arrayValRes = if (isAudio) R.array.format_importance_audio_values else R.array.format_importance_video_values
+                            val items = requireContext().resources.getStringArray(arrayRes)
+                            val itemValues = requireContext().resources.getStringArray(arrayValRes).toSet()
+                            val savedPref = sharedPrefs.getString(key, itemValues.joinToString(",")) ?: itemValues.joinToString(",")
+                            p.summary = savedPref.split(",")
+                                .mapIndexed { index, s -> "${index + 1}. ${items.getOrNull(itemValues.indexOf(s)) ?: s}" }
+                                .joinToString("\n")
+                            p.setOnPreferenceClickListener {
+                                val pref2 = sharedPrefs.getString(key, itemValues.joinToString(",")) ?: itemValues.joinToString(",")
+                                val prefArr = pref2.split(",")
+                                val itms = itemValues.sortedBy { prefArr.indexOf(it) }.map {
+                                    Pair(it, items[itemValues.indexOf(it)])
+                                }.toMutableList()
+
+                                val builder = MaterialAlertDialogBuilder(requireContext())
+                                builder.setTitle(p.title)
+                                val adapter = SortableTextItemAdapter(itms)
+                                val itemTouchCallback = object : ItemTouchHelper.Callback() {
+                                    override fun getMovementFlags(rv: RecyclerView, vh: RecyclerView.ViewHolder): Int =
+                                        makeMovementFlags(ItemTouchHelper.UP or ItemTouchHelper.DOWN, 0)
+                                    override fun onMove(rv: RecyclerView, vh: RecyclerView.ViewHolder, target: RecyclerView.ViewHolder): Boolean {
+                                        val item = adapter.items[vh.absoluteAdapterPosition]
+                                        adapter.items.remove(item)
+                                        adapter.items.add(target.absoluteAdapterPosition, item)
+                                        adapter.notifyItemMoved(vh.absoluteAdapterPosition, target.absoluteAdapterPosition)
+                                        return true
+                                    }
+                                    override fun onSwiped(vh: RecyclerView.ViewHolder, direction: Int) {}
+                                }
+                                val linear = LinearLayout(requireActivity())
+                                linear.orientation = LinearLayout.VERTICAL
+                                val note = TextView(requireActivity())
+                                note.text = getString(R.string.format_importance_note)
+                                note.textSize = 16f
+                                note.setTypeface(note.typeface, Typeface.BOLD)
+                                note.setPadding(20, 20, 20, 20)
+                                linear.addView(note)
+                                val recycler = RecyclerView(requireContext())
+                                recycler.layoutManager = LinearLayoutManager(requireContext())
+                                recycler.adapter = adapter
+                                linear.addView(recycler)
+                                ItemTouchHelper(itemTouchCallback).attachToRecyclerView(recycler)
+                                builder.setView(linear)
+                                builder.setPositiveButton(android.R.string.ok) { _, _ ->
+                                    val newPref = adapter.items.joinToString(",") { it.first }
+                                    sharedPrefs.edit().putString(key, newPref).apply()
+                                    p.summary = adapter.items.mapIndexed { index, pair -> "${index + 1}. ${pair.second}" }.joinToString("\n")
+                                }
+                                builder.setNegativeButton(getString(R.string.cancel), null)
+                                builder.create().show()
+                                true
+                            }
+                        }
+                        // ── yt-dlp version (summary from saved prefs) ─────────────────────────
+                        "ytdl-version" -> {
+                            p.summary = sharedPrefs.getString("ytdl-version", "").takeIf { !it.isNullOrBlank() }
+                                ?: getString(R.string.loading)
+                        }
+                        // ── App version ───────────────────────────────────────────────────────
+                        "version" -> {
+                            val nativeLibDir = requireContext().applicationInfo?.nativeLibraryDir
+                            val abi = nativeLibDir?.split("/lib/")?.getOrNull(1) ?: ""
+                            p.summary = "${BuildConfig.VERSION_NAME} ($abi)"
+                            p.setOnPreferenceClickListener {
+                                lifecycleScope.launch {
+                                    val res = withContext(Dispatchers.IO) { updateUtil!!.tryGetNewVersion() }
+                                    if (res.isFailure) {
+                                        Snackbar.make(requireActivity().window.decorView, res.exceptionOrNull()?.message ?: getString(R.string.network_error), Snackbar.LENGTH_LONG).show()
+                                    } else {
+                                        UiUtil.showNewAppUpdateDialog(res.getOrNull()!!, requireActivity(), sharedPrefs)
+                                    }
+                                }
+                                true
+                            }
+                        }
+                        else -> {
+                            // Unknown/complex type: navigate to the real settings page
+                            p.setOnPreferenceClickListener {
+                                navigateToPreferenceLocation(original.key, categoryKey)
+                                true
+                            }
                         }
                     }
                 }
@@ -703,32 +1107,43 @@ class MainSettingsFragment : BaseSettingsFragment() {
 
         // Copy shared visual properties
         cloned.key = key
-        cloned.title = original.title
+        // Disambiguate preferences with identical titles (add Audio/Video label)
+        cloned.title = when (key) {
+            "embed_thumbnail"         -> "${original.title} (${getString(R.string.audio)})"
+            "video_embed_thumbnail"   -> "${original.title} (${getString(R.string.video)})"
+            "format_importance_audio" -> "${getString(R.string.format_importance)} [${getString(R.string.audio)}]"
+            "format_importance_video" -> "${getString(R.string.format_importance)} [${getString(R.string.video)}]"
+            "file_name_template"      -> "${getString(R.string.file_name_template)} [${getString(R.string.video)}]"
+            "file_name_template_audio"-> "${getString(R.string.file_name_template)} [${getString(R.string.audio)}]"
+            else -> original.title
+        }
         if (cloned.summary.isNullOrEmpty()) cloned.summary = original.summary
         cloned.icon = original.icon
-        // For preferences whose enabled state is controlled at runtime (not just XML),
-        // re-evaluate the actual runtime condition here so search reflects reality.
+        // Re-evaluate runtime enabled state so search reflects reality
         cloned.isEnabled = when (key) {
-            "cache_downloads" -> com.deniscerri.ytdl.util.FileUtil.hasAllFilesAccess()
+            "cache_downloads"         -> FileUtil.hasAllFilesAccess()
+            "schedule_start",
+            "schedule_end"            -> sharedPrefs.getBoolean("use_scheduler", false)
+            "format_importance_video",
+            "format_importance_audio" -> sharedPrefs.getBoolean("use_format_sorting", false)
             else -> original.isEnabled
         }
         cloned.isSelectable = true
-        // isPersistent = true so the PreferenceManager persists values automatically
-        // (the pref is attached to the screen's PreferenceManager, so this works correctly)
         cloned.isPersistent = true
 
-        // Show a "Go →" snackbar immediately on click for all preference types.
-        // Folder path preferences handle their own click (launch picker), so skip them here
-        // to avoid overwriting the picker launcher click handler.
-        if (key !in folderPathKeys) {
+        // For keys with direct action handlers, the click listener is already set inside the
+        // when-block above. For all other non-folder keys, attach the "Go →" navigation snackbar
+        // so the user can jump to the real settings page for advanced editing.
+        if (key !in folderPathKeys && key !in directActionKeys) {
             cloned.setOnPreferenceClickListener {
                 showNavigationPrompt(original, categoryKey)
-                false // let the preference also handle the click (open dialog, toggle, etc.)
+                false // let the preference also handle its built-in click (dialog/toggle)
             }
         }
 
         return cloned
     }
+
 
     private fun showNavigationPrompt(pref: Preference, categoryKey: String) {
         val categoryName = getString(categoryTitles[categoryKey] ?: R.string.settings)
