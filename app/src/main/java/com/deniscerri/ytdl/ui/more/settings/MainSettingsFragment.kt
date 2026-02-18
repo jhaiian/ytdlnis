@@ -444,6 +444,8 @@ class MainSettingsFragment : BaseSettingsFragment() {
         for (i in 0 until group.preferenceCount) {
             val pref = group.getPreference(i)
 
+            if (!pref.isVisible) continue
+
             val title = pref.title?.toString() ?: ""
             val summary = pref.summary?.toString() ?: ""
             val key = pref.key ?: ""
