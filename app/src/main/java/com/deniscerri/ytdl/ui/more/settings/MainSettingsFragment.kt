@@ -556,6 +556,7 @@ class MainSettingsFragment : BaseSettingsFragment() {
                                     .setTitle(getString(R.string.app_icon_change))
                                     .setPositiveButton(getString(R.string.ok)) { _, _ ->
                                         sharedPrefs.edit().putString(key, newValue as String).apply()
+                                        showNavigationPrompt(original, categoryKey)
                                         ThemeUtil.recreateAllActivities()
                                     }
                                     .setNegativeButton(getString(R.string.cancel), null)
@@ -568,6 +569,7 @@ class MainSettingsFragment : BaseSettingsFragment() {
                                     .setTitle(getString(R.string.app_icon_change))
                                     .setPositiveButton(getString(R.string.ok)) { _, _ ->
                                         sharedPrefs.edit().putString(key, newValue as String).apply()
+                                        showNavigationPrompt(original, categoryKey)
                                         ThemeUtil.updateThemes()
                                     }
                                     .setNegativeButton(getString(R.string.cancel), null)
@@ -580,6 +582,7 @@ class MainSettingsFragment : BaseSettingsFragment() {
                                     .setTitle(getString(R.string.app_icon_change))
                                     .setPositiveButton(getString(R.string.ok)) { _, _ ->
                                         sharedPrefs.edit().putString(key, newValue as String).apply()
+                                        showNavigationPrompt(original, categoryKey)
                                         if (newValue == "system") {
                                             AppCompatDelegate.setApplicationLocales(LocaleListCompat.forLanguageTags(null))
                                         } else {
