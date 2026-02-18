@@ -543,11 +543,46 @@ class MainSettingsFragment : BaseSettingsFragment() {
                     lp.value = savedValue
                     val idx = lp.entryValues?.indexOf(savedValue) ?: -1
                     if (idx >= 0) lp.summary = lp.entries[idx] else lp.summary = original.summary
-                    // Update summary after selection
+                    
+                    // Special handling for theme/accent/language that need app restart
+                    val needsRestart = key in listOf("theme", "accent", "app_language", "app_icon")
+                    
                     lp.setOnPreferenceChangeListener { pref, newValue ->
                         val newIdx = lp.entryValues?.indexOf(newValue) ?: -1
                         if (newIdx >= 0) pref.summary = lp.entries[newIdx]
-                        true
+                        
+                        if (needsRestart) {
+                            // Show the confirmation dialog that the real preference would show
+                            MaterialAlertDialogBuilder(requireContext())
+                                .setMessage(getString(R.string.app_icon_change))
+                                .setPositiveButton(getString(R.string.ok)) { _, _ ->
+                                    // Update the summary first
+                                    val newIdx = lp.entryValues?.indexOf(newValue) ?: -1
+                                    if (newIdx >= 0) lp.summary = lp.entries[newIdx]
+                                    
+                                    // Save the preference
+                                    sharedPrefs.edit().putString(key, newValue as String).apply()
+                                    
+                                    // Handle special cases
+                                    when (key) {
+                                        "app_language" -> {
+                                            if (newValue == "system") {
+                                                AppCompatDelegate.setApplicationLocales(LocaleListCompat.forLanguageTags(null))
+                                            } else {
+                                                AppCompatDelegate.setApplicationLocales(LocaleListCompat.forLanguageTags(newValue))
+                                            }
+                                        }
+                                    }
+                                    
+                                    // Restart the app
+                                    ThemeUtil.recreateAllActivities()
+                                }
+                                .setNegativeButton(getString(R.string.cancel), null)
+                                .show()
+                            return@setOnPreferenceChangeListener false // Don't persist yet, dialog will do it
+                        }
+                        
+                        true // Normal preferences persist normally
                     }
                 }
             }
