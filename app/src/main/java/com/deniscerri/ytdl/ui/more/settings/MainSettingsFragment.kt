@@ -647,7 +647,12 @@ class MainSettingsFragment : BaseSettingsFragment() {
         cloned.title = original.title
         if (cloned.summary.isNullOrEmpty()) cloned.summary = original.summary
         cloned.icon = original.icon
-        cloned.isEnabled = original.isEnabled
+        // For preferences whose enabled state is controlled at runtime (not just XML),
+        // re-evaluate the actual runtime condition here so search reflects reality.
+        cloned.isEnabled = when (key) {
+            "cache_downloads" -> com.deniscerri.ytdl.util.FileUtil.hasAllFilesAccess()
+            else -> original.isEnabled
+        }
         cloned.isSelectable = true
         // isPersistent = true so the PreferenceManager persists values automatically
         // (the pref is attached to the screen's PreferenceManager, so this works correctly)
