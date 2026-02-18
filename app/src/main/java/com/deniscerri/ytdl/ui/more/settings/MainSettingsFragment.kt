@@ -544,45 +544,56 @@ class MainSettingsFragment : BaseSettingsFragment() {
                     val idx = lp.entryValues?.indexOf(savedValue) ?: -1
                     if (idx >= 0) lp.summary = lp.entries[idx] else lp.summary = original.summary
                     
-                    // Special handling for theme/accent/language that need app restart
-                    val needsRestart = key in listOf("theme", "accent", "app_language", "app_icon")
-                    
                     lp.setOnPreferenceChangeListener { pref, newValue ->
                         val newIdx = lp.entryValues?.indexOf(newValue) ?: -1
                         if (newIdx >= 0) pref.summary = lp.entries[newIdx]
                         
-                        if (needsRestart) {
-                            // Show the confirmation dialog that the real preference would show
-                            MaterialAlertDialogBuilder(requireContext())
-                                .setMessage(getString(R.string.app_icon_change))
-                                .setPositiveButton(getString(R.string.ok)) { _, _ ->
-                                    // Update the summary first
-                                    val newIdx = lp.entryValues?.indexOf(newValue) ?: -1
-                                    if (newIdx >= 0) lp.summary = lp.entries[newIdx]
-                                    
-                                    // Save the preference
-                                    sharedPrefs.edit().putString(key, newValue as String).apply()
-                                    
-                                    // Handle special cases
-                                    when (key) {
-                                        "app_language" -> {
-                                            if (newValue == "system") {
-                                                AppCompatDelegate.setApplicationLocales(LocaleListCompat.forLanguageTags(null))
-                                            } else {
-                                                AppCompatDelegate.setApplicationLocales(LocaleListCompat.forLanguageTags(newValue))
-                                            }
-                                        }
+                        // Handle preferences that need app restart
+                        when (key) {
+                            "ytdlnis_icon" -> {
+                                // App icon shows confirmation dialog
+                                MaterialAlertDialogBuilder(requireContext())
+                                    .setMessage(getString(R.string.app_icon_change))
+                                    .setPositiveButton(getString(R.string.ok)) { _, _ ->
+                                        sharedPrefs.edit().putString(key, newValue as String).apply()
+                                        ThemeUtil.recreateAllActivities()
                                     }
-                                    
-                                    // Restart the app
-                                    ThemeUtil.recreateAllActivities()
-                                }
-                                .setNegativeButton(getString(R.string.cancel), null)
-                                .show()
-                            return@setOnPreferenceChangeListener false // Don't persist yet, dialog will do it
+                                    .setNegativeButton(getString(R.string.cancel), null)
+                                    .show()
+                                return@setOnPreferenceChangeListener false
+                            }
+                            "ytdlnis_theme", "theme_accent" -> {
+                                // Theme and accent show confirmation dialog
+                                MaterialAlertDialogBuilder(requireContext())
+                                    .setMessage(getString(R.string.app_icon_change))
+                                    .setPositiveButton(getString(R.string.ok)) { _, _ ->
+                                        sharedPrefs.edit().putString(key, newValue as String).apply()
+                                        ThemeUtil.updateThemes()
+                                    }
+                                    .setNegativeButton(getString(R.string.cancel), null)
+                                    .show()
+                                return@setOnPreferenceChangeListener false
+                            }
+                            "app_language" -> {
+                                // Language shows confirmation dialog
+                                MaterialAlertDialogBuilder(requireContext())
+                                    .setMessage(getString(R.string.app_icon_change))
+                                    .setPositiveButton(getString(R.string.ok)) { _, _ ->
+                                        sharedPrefs.edit().putString(key, newValue as String).apply()
+                                        if (newValue == "system") {
+                                            AppCompatDelegate.setApplicationLocales(LocaleListCompat.forLanguageTags(null))
+                                        } else {
+                                            AppCompatDelegate.setApplicationLocales(LocaleListCompat.forLanguageTags(newValue as String))
+                                        }
+                                        ThemeUtil.updateThemes()
+                                    }
+                                    .setNegativeButton(getString(R.string.cancel), null)
+                                    .show()
+                                return@setOnPreferenceChangeListener false
+                            }
                         }
                         
-                        true // Normal preferences persist normally
+                        true // Normal preferences persist automatically
                     }
                 }
             }
