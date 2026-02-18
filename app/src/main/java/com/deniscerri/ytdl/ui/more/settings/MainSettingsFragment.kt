@@ -51,6 +51,7 @@ import com.deniscerri.ytdl.database.models.SearchHistoryItem
 import com.deniscerri.ytdl.database.models.TemplateShortcut
 import com.deniscerri.ytdl.database.viewmodel.SettingsViewModel
 import com.deniscerri.ytdl.database.viewmodel.DownloadViewModel
+import com.deniscerri.ytdl.database.viewmodel.YTDLPViewModel
 import com.deniscerri.ytdl.ui.adapter.SortableTextItemAdapter
 import com.deniscerri.ytdl.util.FileUtil
 import com.deniscerri.ytdl.util.ThemeUtil
@@ -90,6 +91,11 @@ class MainSettingsFragment : BaseSettingsFragment() {
     private lateinit var editor: SharedPreferences.Editor
     private lateinit var searchManager: SettingsSearchManager
     private var downloadViewModel: DownloadViewModel? = null
+    private var ytdlpViewModel: YTDLPViewModel? = null
+
+    // Registry of all clones built during a search pass, keyed by preference key.
+    // Used to wire live dependency updates (e.g. toggling a switch enables/disables dependents).
+    private val clonedPrefsRegistry = mutableMapOf<String, Preference>()
 
     private val searchCategories = mutableMapOf<String, PreferenceCategory>()
     private var isSearchMode = false
@@ -247,6 +253,7 @@ class MainSettingsFragment : BaseSettingsFragment() {
 
         updateUtil = UpdateUtil(requireContext())
         downloadViewModel = ViewModelProvider(requireActivity())[DownloadViewModel::class.java]
+        ytdlpViewModel = ViewModelProvider(this)[YTDLPViewModel::class.java]
 
         WorkManager.getInstance(requireContext()).getWorkInfosByTagLiveData("download").observe(this){
             activeDownloadCount = 0
@@ -388,6 +395,7 @@ class MainSettingsFragment : BaseSettingsFragment() {
             preferenceScreen.removePreference(category)
         }
         searchCategories.clear()
+        clonedPrefsRegistry.clear()
 
         // Use traditional search to ensure we find everything
         categoryFragmentMap.forEach { (categoryKey, xmlRes) ->
@@ -408,6 +416,9 @@ class MainSettingsFragment : BaseSettingsFragment() {
                 searchCategories[categoryKey] = mainCategory
             }
         }
+
+        // Wire live dependency updates between cloned prefs now that all clones are registered
+        wireLiveDependencies()
 
         super.filterPreferences(query)
         hideEmptyCategoriesInMain()
@@ -438,6 +449,7 @@ class MainSettingsFragment : BaseSettingsFragment() {
             preferenceScreen.removePreference(category)
         }
         searchCategories.clear()
+        clonedPrefsRegistry.clear()
 
         restoreAllPreferences()
         appearance?.isVisible = true
@@ -448,6 +460,67 @@ class MainSettingsFragment : BaseSettingsFragment() {
         advanced?.isVisible = true
         
         findPreference<PreferenceCategory>("backup_restore")?.isVisible = true
+    }
+
+    /**
+     * When we navigate to a sub-fragment from search (changelog, player client, PO tokens)
+     * we intentionally do NOT call restoreNormalView() so the search state is preserved.
+     * On returning to this fragment, onResume re-applies the last query so results are rebuilt.
+     */
+    override fun onResume() {
+        super.onResume()
+        val query = lastSearchQuery
+        if (query.isNotBlank()) {
+            // Re-enter search mode so the results are fresh (e.g. version string may have updated,
+            // or the user may have changed a setting in the sub-fragment we just returned from).
+            filterPreferences(query)
+        }
+    }
+
+    /**
+     * Wires live enabled-state propagation between cloned switch prefs and their dependents.
+     * Called once after all clones for a search pass are registered in [clonedPrefsRegistry].
+     *
+     * Known pairs: use_scheduler → schedule_start / schedule_end
+     *              use_format_sorting → format_importance_video / format_importance_audio
+     *              use_sponsorblock → sponsorblock_filters / sponsorblock_url
+     *              embed_thumbnail → crop_thumbnail
+     */
+    private fun wireLiveDependencies() {
+        val pairs = mapOf(
+            "use_scheduler"     to listOf("schedule_start", "schedule_end"),
+            "use_format_sorting" to listOf("format_importance_video", "format_importance_audio"),
+            "use_sponsorblock"  to listOf("sponsorblock_filters", "sponsorblock_url"),
+            "embed_thumbnail"   to listOf("crop_thumbnail"),
+            "no_part"           to listOf("keep_cache"),
+            "aria2"             to listOf("concurrent_fragments")   // aria2 disableDependentsState=true → inverted
+        )
+        val invertedDeps = setOf("aria2")  // these disable dependents when ON rather than OFF
+
+        pairs.forEach { (parentKey, dependentKeys) ->
+            val parentClone = clonedPrefsRegistry[parentKey] as? androidx.preference.SwitchPreferenceCompat
+                ?: clonedPrefsRegistry[parentKey] as? androidx.preference.SwitchPreference
+                ?: return@forEach
+
+            dependentKeys.forEach { depKey ->
+                val depClone = clonedPrefsRegistry[depKey] ?: return@forEach
+                // Set initial enabled state
+                val parentIsChecked = when (parentClone) {
+                    is androidx.preference.SwitchPreferenceCompat -> parentClone.isChecked
+                    is androidx.preference.SwitchPreference -> parentClone.isChecked
+                    else -> false
+                }
+                depClone.isEnabled = if (parentKey in invertedDeps) !parentIsChecked else parentIsChecked
+
+                // Propagate changes
+                val existing = parentClone.onPreferenceChangeListener
+                parentClone.setOnPreferenceChangeListener { pref, newValue ->
+                    val isNowChecked = newValue as? Boolean ?: false
+                    depClone.isEnabled = if (parentKey in invertedDeps) !isNowChecked else isNowChecked
+                    existing?.onPreferenceChange(pref, newValue) ?: true
+                }
+            }
+        }
     }
 
     private fun enterSearchMode(query: String) {
@@ -566,6 +639,10 @@ class MainSettingsFragment : BaseSettingsFragment() {
                 
             } else {
                 val clonedPref = clonePreference(pref, categoryKey)
+                // Register in the registry so dependency wiring can find it by key
+                if (clonedPref.key.isNotBlank()) {
+                    clonedPrefsRegistry[clonedPref.key] = clonedPref
+                }
                 
                 if (currentParentCategory != null && !currentParentHasChildren) {
                     mainCategory.addPreference(currentParentCategory!!)
@@ -982,34 +1059,28 @@ class MainSettingsFragment : BaseSettingsFragment() {
                                 true
                             }
                         }
-                        // ── Changelog (navigate to sub-fragment) ──────────────────────────────
+                        // ── Changelog (navigate to sub-fragment, preserve search state) ──────
                         "changelog" -> {
                             p.setOnPreferenceClickListener {
-                                (activity as? SettingsActivity)?.clearSearchFocus()
                                 hideKeyboard()
-                                restoreNormalView()
                                 findNavController().navigate(R.id.changeLogFragment)
                                 true
                             }
                         }
-                        // ── Player client (navigate to sub-fragment) ──────────────────────────
+                        // ── Player client (navigate to sub-fragment, preserve search state) ──
                         "yt_player_client" -> {
                             p.summary = original.summary
                             p.setOnPreferenceClickListener {
-                                (activity as? SettingsActivity)?.clearSearchFocus()
                                 hideKeyboard()
-                                restoreNormalView()
                                 findNavController().navigate(R.id.youtubePlayerClientFragment)
                                 true
                             }
                         }
-                        // ── Generate PO tokens (navigate to sub-fragment) ─────────────────────
+                        // ── Generate PO tokens (navigate to sub-fragment, preserve search) ───
                         "generate_po_tokens" -> {
                             p.summary = original.summary
                             p.setOnPreferenceClickListener {
-                                (activity as? SettingsActivity)?.clearSearchFocus()
                                 hideKeyboard()
-                                restoreNormalView()
                                 findNavController().navigate(R.id.generateYoutubePoTokensFragment)
                                 true
                             }
@@ -1071,10 +1142,22 @@ class MainSettingsFragment : BaseSettingsFragment() {
                                 true
                             }
                         }
-                        // ── yt-dlp version (summary from saved prefs) ─────────────────────────
+                        // ── yt-dlp version (fetch live, fall back to cached) ──────────────────
                         "ytdl-version" -> {
-                            p.summary = sharedPrefs.getString("ytdl-version", "").takeIf { !it.isNullOrBlank() }
-                                ?: getString(R.string.loading)
+                            val cached = sharedPrefs.getString("ytdl-version", "").orEmpty()
+                            p.summary = if (cached.isNotBlank()) cached else getString(R.string.loading)
+                            // Always attempt a fresh fetch so the summary reflects the current value
+                            lifecycleScope.launch {
+                                val version = withContext(Dispatchers.IO) {
+                                    ytdlpViewModel?.getVersion(
+                                        sharedPrefs.getString("ytdlp_source", "stable") ?: "stable"
+                                    ).orEmpty()
+                                }
+                                if (version.isNotBlank()) {
+                                    sharedPrefs.edit().putString("ytdl-version", version).apply()
+                                    p.summary = version
+                                }
+                            }
                         }
                         // ── App version ───────────────────────────────────────────────────────
                         "version" -> {
@@ -1131,13 +1214,17 @@ class MainSettingsFragment : BaseSettingsFragment() {
         cloned.isSelectable = true
         cloned.isPersistent = true
 
-        // For keys with direct action handlers, the click listener is already set inside the
-        // when-block above. For all other non-folder keys, attach the "Go →" navigation snackbar
-        // so the user can jump to the real settings page for advanced editing.
-        if (key !in folderPathKeys && key !in directActionKeys) {
-            cloned.setOnPreferenceClickListener {
+        // These keys navigate away from the fragment entirely — showing a snackbar alongside
+        // is redundant and the view is being destroyed/replaced anyway.
+        val noSnackbarKeys = folderPathKeys + setOf("changelog", "yt_player_client", "generate_po_tokens")
+
+        if (key !in noSnackbarKeys) {
+            // Wrap whatever click listener was set in the when-block above so the snackbar
+            // fires on EVERY click of ANY non-navigation preference in search.
+            val innerListener = cloned.onPreferenceClickListener
+            cloned.setOnPreferenceClickListener { pref ->
                 showNavigationPrompt(original, categoryKey)
-                false // let the preference also handle its built-in click (dialog/toggle)
+                innerListener?.onPreferenceClick(pref) ?: false
             }
         }
 
